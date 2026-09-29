@@ -240,6 +240,8 @@ final class TranscriptReader {
     private var paths: [String: URL] = [:]
     private var mtimes: [String: Date] = [:]
     private var cache: [String: TranscriptInfo] = [:]
+    /// Sessions whose whole file was already searched: anything new is appended, so only the tail matters.
+    private var searchedBack: Set<String> = []
 
     /// Returns nil when nothing changed since the last call.
     func read(sessionId: String, cwd: String) -> TranscriptInfo? {
@@ -256,14 +258,16 @@ final class TranscriptReader {
         if let t = tail.title { info.title = t }
         if let d = tail.lastUserAt { info.lastUserAt = d }
         // Title or your last message can be far back after a long tool-heavy turn: read further back
-        // in growing chunks until both are found (at worst the whole file, once).
+        // in growing chunks until both are found (at worst the whole file, once — a session with no
+        // title at all must not re-read a 100 MB file every time it changes).
         var window = 512 * 1024
-        while (info.title == nil || info.lastUserAt == nil), window < size {
+        while (info.title == nil || info.lastUserAt == nil), window < size, !searchedBack.contains(sessionId) {
             window = min(window * 8, size)
             let more = parse(lines: readTail(url, bytes: window))
             if info.title == nil { info.title = more.title }
             if info.lastUserAt == nil { info.lastUserAt = more.lastUserAt }
         }
+        if window >= size || (info.title != nil && info.lastUserAt != nil) { searchedBack.insert(sessionId) }
         cache[sessionId] = info
         return info
     }

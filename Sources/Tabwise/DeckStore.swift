@@ -57,6 +57,9 @@ final class DeckStore: ObservableObject {
     private let keepAwake = KeepAwake()
     @Published private(set) var keepingAwake = false
     private var monitorsBusy = false
+    /// Transcript reads run here, never on the main thread (some transcripts are 100+ MB).
+    private let transcriptQueue = DispatchQueue(label: "tabwise.transcripts", qos: .utility)
+    private var transcriptsBusy = false
     /// Called after every status poll (drives the menu bar icon).
     var onPolled: (() -> Void)?
     private var saveScheduled = false
@@ -489,17 +492,10 @@ final class DeckStore: ObservableObject {
     private func poll() {
         let entries = Registry.running()
         let appActive = NSApp.isActive
-        var resort = false
         var statusChanged = false
+        refreshTranscripts()
         for tab in tabs {
             let previous = tab.status
-            if let id = tab.sessionId, let info = transcripts.read(sessionId: id, cwd: tab.cwd), info != tab.transcript {
-                tab.transcript = info
-                if let at = info.lastUserAt, at > tab.lastActive {
-                    tab.lastActive = at
-                    resort = true
-                }
-            }
             if tab.status == .exited || tab.status == .notStarted || tab.archived { continue }
             let match = tab.shellPid > 0
                 ? entries.first { Registry.pid($0.pid, descendsFrom: tab.shellPid) }
@@ -525,8 +521,7 @@ final class DeckStore: ObservableObject {
                 updateBadge()
             }
         }
-        // The sidebar sorts on the store, so tell it when a tab's last-message time moved.
-        if resort || statusChanged { objectWillChange.send() } // also refreshes group headers and counts
+        if statusChanged { objectWillChange.send() } // also refreshes group headers and counts
         let awake: Bool
         switch DeckSettings.keepAwake {
         case .working: awake = liveTabs.contains { $0.status == .working }
@@ -545,6 +540,38 @@ final class DeckStore: ObservableObject {
         onPolled?()
         // Cheap: only touches the disk when something actually changed.
         save()
+    }
+
+    /// Titles, previews and last-message times from each tab's transcript, read off the main thread.
+    private func refreshTranscripts() {
+        guard !transcriptsBusy else { return }
+        let jobs = tabs.compactMap { tab in tab.sessionId.map { (tab: tab.id, session: $0, cwd: tab.cwd) } }
+        guard !jobs.isEmpty else { return }
+        transcriptsBusy = true
+        let reader = transcripts
+        transcriptQueue.async {
+            let results = jobs.compactMap { job in
+                reader.read(sessionId: job.session, cwd: job.cwd).map { (tab: job.tab, session: job.session, info: $0) }
+            }
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.transcriptsBusy = false
+                    var resort = false
+                    for result in results {
+                        guard let tab = self.tabs.first(where: { $0.id == result.tab }),
+                              tab.sessionId == result.session, result.info != tab.transcript else { continue }
+                        tab.transcript = result.info
+                        if let at = result.info.lastUserAt, at > tab.lastActive {
+                            tab.lastActive = at
+                            resort = true
+                        }
+                    }
+                    // The sidebar sorts on the store, so tell it when a tab's last-message time moved.
+                    if resort { self.objectWillChange.send() }
+                }
+            }
+        }
     }
 
     /// Memory per session (every 5 s) and git state per folder (every 15 s), measured off the main thread.

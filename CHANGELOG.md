@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Fix the app freezing (spinning wheel) while a session with a very large conversation is working:
+  transcripts are now read in the background, and a file without a title is searched only once
+
 ## 0.1.0
 
 First public release.
