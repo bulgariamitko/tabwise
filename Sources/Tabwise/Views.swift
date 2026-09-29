@@ -57,6 +57,7 @@ struct Sidebar: View {
     @State private var groupText = ""
     @State private var dropTargeted = false
     @AppStorage("archiveExpanded") private var archiveExpanded = false
+    @AppStorage("pinnedExpanded") private var pinnedExpanded = true
     @State private var notingSession: String?
     @State private var noteText = ""
 
@@ -99,11 +100,11 @@ struct Sidebar: View {
         let ordered = store.ordered
         return List(selection: $store.selectedID) {
             if !store.pinnedTabs.isEmpty {
-                Section {
+                Section(isExpanded: $pinnedExpanded) {
                     ForEach(store.pinnedTabs) { tab in row(tab, ordered) }
                         .onMove { store.movePinned(from: $0, to: $1) }
                 } header: {
-                    Label("Pinned", systemImage: "pin.fill")
+                    Label("Pinned (\(store.pinnedTabs.count))", systemImage: "pin.fill")
                 }
             }
             if store.layout == .projects {
@@ -896,6 +897,7 @@ struct HistoryList: View {
     @State private var search = ""
     @State private var project: String?
     @AppStorage("historyShowEmpty") private var showEmpty = false
+    @AppStorage("historyPinnedExpanded") private var pinnedExpanded = true
     @State private var renaming: HistoryItem?
     @State private var renameText = ""
     @State private var notingItem: HistoryItem?
@@ -929,10 +931,10 @@ struct HistoryList: View {
         let rest = all.filter { !history.isPinned($0.id) }.sorted { $0.lastActive > $1.lastActive }
         List(selection: $store.selectedHistoryID) {
             if !pinned.isEmpty {
-                Section {
+                Section(isExpanded: $pinnedExpanded) {
                     ForEach(pinned) { row($0) }
                         .onMove { history.movePinned(from: $0, to: $1, visible: pinned.map(\.id)) }
-                } header: { Label("Pinned", systemImage: "pin.fill") }
+                } header: { Label("Pinned (\(pinned.count))", systemImage: "pin.fill") }
             }
             Section {
                 ForEach(rest) { row($0) }

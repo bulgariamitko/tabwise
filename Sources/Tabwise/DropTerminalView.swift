@@ -18,9 +18,41 @@ final class DropTerminalView: LocalProcessTerminalView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL, .png, .tiff])
+        _ = Self.deleteWordMonitor
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// ⌘⌫ and ⌥⌫ delete the previous word (repeating while held), like a Mac text field. Sent as ⌃W,
+    /// which Claude Code's input box and the shell both treat as "delete word". SwiftTerm's keyDown
+    /// can't be overridden, so a local key monitor catches them before the terminal does.
+    private static let deleteWordMonitor: Any? = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard event.keyCode == 51, mods == .command || mods == .option, // Delete (backspace)
+              let terminal = event.window?.firstResponder as? DropTerminalView else { return event }
+        terminal.send(txt: "\u{17}")
+        return nil
+    }
+
+    private var repaintScheduled = false
+
+    /// SwiftTerm only repaints the rows it thinks changed, and Claude Code's in-place redraws (the
+    /// slash-command list above the input box) can leave rows showing stale text. Once output settles,
+    /// repaint the whole visible screen, which is cheap at most once per burst.
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        super.dataReceived(slice: slice)
+        guard !repaintScheduled, !isHidden else { return }
+        repaintScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self else { return }
+            self.repaintScheduled = false
+            self.needsDisplay = true
+        }
+    }
+
+    override var isHidden: Bool {
+        didSet { if !isHidden, oldValue { needsDisplay = true } } // switching back to a tab
+    }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard canAccept(sender.draggingPasteboard) else { return [] }

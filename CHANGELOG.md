@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- ⌘⌫ and ⌥⌫ delete the previous word in the terminal (hold to keep deleting)
+- The Pinned sections (open tabs and All Sessions) can be collapsed, and show how many they hold
+- Fix leftover lines in Claude Code's slash-command list: the terminal repaints fully once output settles
+
 ## 0.1.1
 
 - Fix the app freezing (spinning wheel) while a session with a very large conversation is working:
