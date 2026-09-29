@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Keyboard shortcuts for tab actions, also shown in the right-click menu: ⌘S sleep / wake,
+  ⌥⌘S sleep other tabs, ⌘E rename, ⇧⌘N note, ⌥⌘R reveal in Finder, ⌥⌘C copy session ID
+
 ## 0.1.2
 
 - ⌘⌫ and ⌥⌫ delete the previous word in the terminal (hold to keep deleting)

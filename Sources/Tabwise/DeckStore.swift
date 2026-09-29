@@ -46,6 +46,9 @@ final class DeckStore: ObservableObject {
     private var backupWatch: Any?
     private var colorsWatch: Any?
     @Published var showSwitcher = false
+    /// Set by ⌘E / ⇧⌘N; the sidebar opens its rename / note dialog for this tab.
+    @Published var renameRequest: SessionTab?
+    @Published var noteRequest: SessionTab?
     @Published var showBroadcast = false
     @Published var showWelcome = false
     /// Closed tabs, newest first, so an accidental ⌘W is never a lost session.

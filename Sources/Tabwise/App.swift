@@ -33,6 +33,26 @@ enum AppActions {
         store.newShell(in: store.selected?.cwd ?? lastFolder)
     }
 
+    /// ⌘S: sleep a running tab (asking first if Claude is mid-reply), or wake a sleeping one.
+    static func toggleSleep(_ tab: SessionTab, store: DeckStore) {
+        if tab.status == .notStarted { store.wake(tab); return }
+        if tab.status == .working {
+            let alert = NSAlert()
+            alert.messageText = "Put “\(tab.displayName)” to sleep?"
+            alert.informativeText = "Claude is still working in this tab; its current reply will be interrupted. Everything up to now is kept, and waking the tab resumes the conversation."
+            alert.addButton(withTitle: "Put to Sleep")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        store.sleep(tab)
+    }
+
+    static func copySessionID(_ tab: SessionTab) {
+        guard let id = tab.sessionId else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(id, forType: .string)
+    }
+
     static func close(_ tab: SessionTab, store: DeckStore) {
         if tab.status == .working {
             let alert = NSAlert()
@@ -191,7 +211,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if let tab = store.selected { AppActions.close(tab, store: store) } else { window.performClose(nil) }
     }
     @objc func restartTab(_ sender: Any?) { store.selected?.restart() }
-    @objc func sleepTab(_ sender: Any?) { if let t = store.selected { store.sleep(t) } }
+    @objc func sleepTab(_ sender: Any?) { if let t = store.selected { AppActions.toggleSleep(t, store: store) } }
+    @objc func renameTab(_ sender: Any?) { store.renameRequest = store.selected }
+    @objc func noteTab(_ sender: Any?) { store.noteRequest = store.selected }
+    @objc func copySessionID(_ sender: Any?) { if let t = store.selected { AppActions.copySessionID(t) } }
+    @objc func revealTab(_ sender: Any?) {
+        if let t = store.selected { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: t.cwd) }
+    }
     @objc func sleepOthers(_ sender: Any?) { store.sleepOthers() }
     @objc func nextTab(_ sender: Any?) { store.selectRelative(1) }
     @objc func previousTab(_ sender: Any?) { store.selectRelative(-1) }
@@ -352,6 +378,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             item.title = store.selected?.pinned == true ? "Unpin Tab" : "Pin Tab to Top"
             return store.selected.map { !$0.archived } ?? false
         }
+        if item.action == #selector(sleepTab(_:)) {
+            item.title = store.selected?.status == .notStarted ? "Wake Up Tab" : "Put Tab to Sleep"
+            return store.selected.map { !$0.archived } ?? false
+        }
+        if item.action == #selector(noteTab(_:)) {
+            let id = store.selected?.sessionId
+            item.title = id.flatMap { store.history.note($0) } == nil ? "Add Note…" : "Edit Note…"
+            return id != nil
+        }
+        if item.action == #selector(copySessionID(_:)) { return store.selected?.sessionId != nil }
+        if [#selector(renameTab(_:)), #selector(revealTab(_:))].contains(item.action) { return store.selected != nil }
         if item.action == #selector(archiveTab(_:)) {
             return store.selected.map { !$0.archived } ?? false
         }
@@ -407,8 +444,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add(file, "Import Sessions…", #selector(importSessions(_:)), "i", [.command, .shift], target: self)
         file.addItem(.separator())
         add(file, "Restart Tab", #selector(restartTab(_:)), "r", [.command, .shift], target: self)
-        add(file, "Put Tab to Sleep", #selector(sleepTab(_:)), target: self)
-        add(file, "Put Other Tabs to Sleep", #selector(sleepOthers(_:)), target: self)
+        add(file, "Put Tab to Sleep", #selector(sleepTab(_:)), "s", target: self)
+        add(file, "Put Other Tabs to Sleep", #selector(sleepOthers(_:)), "s", [.command, .option], target: self)
+        add(file, "Rename Tab…", #selector(renameTab(_:)), "e", target: self)
+        add(file, "Add Note…", #selector(noteTab(_:)), "n", [.command, .shift], target: self)
+        add(file, "Copy Session ID", #selector(copySessionID(_:)), "c", [.command, .option], target: self)
+        add(file, "Reveal in Finder", #selector(revealTab(_:)), "r", [.command, .option], target: self)
         add(file, "Pin / Unpin Tab", #selector(togglePin(_:)), "p", [.command, .shift], target: self)
         add(file, "Archive Tab", #selector(archiveTab(_:)), "a", [.command, .shift], target: self)
         add(file, "Close Tab", #selector(closeTab(_:)), "w", target: self)

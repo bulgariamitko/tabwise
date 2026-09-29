@@ -165,6 +165,17 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
+        .onChange(of: store.renameRequest?.id) {
+            guard let tab = store.renameRequest else { return }
+            store.renameRequest = nil
+            renameText = tab.customName ?? tab.displayName; renaming = tab
+        }
+        .onChange(of: store.noteRequest?.id) {
+            guard let tab = store.noteRequest else { return }
+            store.noteRequest = nil
+            guard let id = tab.sessionId else { return }
+            noteText = store.history.note(id) ?? ""; notingSession = id
+        }
         .alert("Rename tab", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
             Button("Rename") { if let t = renaming { store.rename(t, to: renameText) } }
@@ -195,18 +206,6 @@ struct Sidebar: View {
             })
     }
 
-    private func confirmSleep(_ tab: SessionTab) {
-        if tab.status == .working {
-            let alert = NSAlert()
-            alert.messageText = "Put “\(tab.displayName)” to sleep?"
-            alert.informativeText = "Claude is still working in this tab; its current reply will be interrupted. Everything up to now is kept, and waking the tab resumes the conversation."
-            alert.addButton(withTitle: "Put to Sleep")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
-        store.sleep(tab)
-    }
-
     @ViewBuilder
     private func menu(for tab: SessionTab) -> some View {
         if tab.archived {
@@ -214,6 +213,7 @@ struct Sidebar: View {
             Divider()
         } else {
             Button(tab.pinned ? "Unpin" : "Pin to Top") { store.togglePin(tab) }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
         }
         FolderColorMenu(colors: store.folderColors, path: tab.cwd)
         Menu("Color") {
@@ -229,10 +229,12 @@ struct Sidebar: View {
             Button("No Color") { store.setColor(tab, nil) }.disabled(tab.color == nil)
         }
         Button("Rename…") { renameText = tab.customName ?? tab.displayName; renaming = tab }
+            .keyboardShortcut("e", modifiers: .command)
         if let id = tab.sessionId {
             Button(store.history.note(id) == nil ? "Add Note…" : "Edit Note…") {
                 noteText = store.history.note(id) ?? ""; notingSession = id
             }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
         }
         if !tab.archived, [.idle, .working, .waiting].contains(tab.status), !store.prompts.prompts.isEmpty {
             Menu("Send Prompt") {
@@ -253,13 +255,14 @@ struct Sidebar: View {
         }
         Divider()
         Button("Start New Session in This Folder") { store.newSession(inFolderOf: tab.cwd, args: tab.extraArgs) }
+            .keyboardShortcut("t", modifiers: [.command, .control])
         Button("Open Shell in This Folder") { store.newShell(in: tab.cwd) }
+            .keyboardShortcut("t", modifiers: [.command, .option])
         Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: tab.cwd) }
+            .keyboardShortcut("r", modifiers: [.command, .option])
         if let id = tab.sessionId {
-            Button("Copy Session ID") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(id, forType: .string)
-            }
+            Button("Copy Session ID") { AppActions.copySessionID(tab) }
+                .keyboardShortcut("c", modifiers: [.command, .option])
         }
         if !tab.archived && tab.id != store.selectedID {
             Button(store.splitID == tab.id ? "Close Split" : "Show Side by Side") {
@@ -268,18 +271,21 @@ struct Sidebar: View {
         }
         if !tab.archived {
             Button(tab.isClaude ? "Restart (resume conversation)" : "Restart") { tab.restart() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             Divider()
-            if tab.status == .notStarted {
-                Button("Wake Up") { store.wake(tab) }
-            } else {
-                Button("Put to Sleep (free memory)") { confirmSleep(tab) }
+            Button(tab.status == .notStarted ? "Wake Up" : "Put to Sleep (free memory)") {
+                AppActions.toggleSleep(tab, store: store)
             }
+            .keyboardShortcut("s", modifiers: .command)
             Button("Put Other Tabs to Sleep") { store.sleepOthers() }
+                .keyboardShortcut("s", modifiers: [.command, .option])
             Button("Archive") { store.archive(tab) }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
         } else {
             Divider()
         }
         Button("Close Tab") { AppActions.close(tab, store: store) }
+            .keyboardShortcut("w", modifiers: .command)
     }
 }
 
