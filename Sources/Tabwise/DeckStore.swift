@@ -225,6 +225,7 @@ final class DeckStore: ObservableObject {
     func close(_ tab: SessionTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         let next = neighbor(of: tab)
+        tab.stashDraft() // so Reopen Closed Tab brings it back
         var record = tab.saved
         record.closedAt = Date()
         recentlyClosed.removeAll { $0.id == tab.id || ($0.sessionId != nil && $0.sessionId == tab.sessionId) }
@@ -288,6 +289,7 @@ final class DeckStore: ObservableObject {
     func archive(_ tab: SessionTab) {
         guard !tab.archived else { return }
         let next = neighbor(of: tab)
+        tab.stashDraft()
         tab.terminate()
         tab.archived = true
         tab.status = .archived
@@ -344,6 +346,15 @@ final class DeckStore: ObservableObject {
         guard let cwd, FileManager.default.fileExists(atPath: cwd) else { NSSound.beep(); return }
         sidebarMode = .open
         newClaude(in: cwd, args: args)
+    }
+
+    /// Like `claude --continue`: reopen the most recent conversation in `cwd` (or jump to it if it's already a tab);
+    /// starts a new session if that folder has none yet.
+    func continueLast(in cwd: String, args: [String] = []) {
+        guard FileManager.default.fileExists(atPath: cwd) else { NSSound.beep(); return }
+        sidebarMode = .open
+        guard let last = HistoryScanner.lastSession(in: cwd) else { newClaude(in: cwd, args: args); return }
+        resume(ResumeCommand(sessionId: last.id, args: args), cwd: cwd, quitOriginal: true)
     }
 
     func openTab(for sessionId: String) -> SessionTab? { tabs.first { $0.sessionId == sessionId } }
@@ -623,11 +634,19 @@ final class DeckStore: ObservableObject {
                 }
             }
             if let pending = tab.pendingDraft {
-                // Wait until Claude has settled, then restore once into an empty box.
+                // Wait until Claude has settled, then type it into the empty box. A big conversation can still be
+                // loading and drop the text, so keep it (and the Draft badge) until it actually shows up, retrying.
                 guard tab.status == .idle, Date().timeIntervalSince(tab.startedAt) > 4 else { continue }
-                tab.pendingDraft = nil
-                if text.isEmpty { tab.terminal.insert(pending.replacingOccurrences(of: "\u{0}", with: " "), submit: false) }
-                continue
+                if !text.isEmpty || tab.draftRestoreTries >= 10 {
+                    tab.pendingDraft = nil // it's in the box (or you typed something else there)
+                } else {
+                    if Date().timeIntervalSince(tab.lastDraftRestore) > 4 {
+                        tab.draftRestoreTries += 1
+                        tab.lastDraftRestore = Date()
+                        tab.terminal.insert(pending.replacingOccurrences(of: "\u{0}", with: " "), submit: false)
+                    }
+                    continue
+                }
             }
             let draft = text.isEmpty ? nil : text
             if draft != tab.draft { tab.draft = draft }

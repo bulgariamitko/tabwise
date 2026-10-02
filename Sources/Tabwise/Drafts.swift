@@ -31,9 +31,12 @@ enum DraftReader {
         }
     }
 
+    /// A horizontal border line. It may carry a label, e.g. a renamed session shows "──── my-name ─".
     private static func isRule(_ chars: [Character]) -> Bool {
+        let isLine: (Character) -> Bool = { $0 == "─" || $0 == "━" || $0 == "╌" }
         let s = chars.filter { $0 != " " }
-        return s.count > 10 && s.allSatisfy { $0 == "─" || $0 == "━" || $0 == "╌" }
+        guard let first = s.first, let last = s.last, isLine(first), isLine(last) else { return false }
+        return s.filter(isLine).count > max(10, s.count * 2 / 3)
     }
 
     /// The unsent text in the input box, "" when it's empty, nil when no input box is on screen.

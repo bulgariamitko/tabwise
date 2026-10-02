@@ -104,7 +104,7 @@ struct Sidebar: View {
                     ForEach(store.pinnedTabs) { tab in row(tab, ordered) }
                         .onMove { store.movePinned(from: $0, to: $1) }
                 } header: {
-                    Label("Pinned (\(store.pinnedTabs.count))", systemImage: "pin.fill")
+                    SectionHeader(title: "Pinned (\(store.pinnedTabs.count))", icon: "pin.fill", expanded: $pinnedExpanded)
                 }
             }
             if store.layout == .projects {
@@ -124,7 +124,7 @@ struct Sidebar: View {
                 Section(isExpanded: $archiveExpanded) {
                     ForEach(store.archivedTabs) { tab in row(tab, ordered) }
                 } header: {
-                    Label("Archived (\(store.archivedTabs.count))", systemImage: "archivebox")
+                    SectionHeader(title: "Archived (\(store.archivedTabs.count))", icon: "archivebox", expanded: $archiveExpanded)
                 }
             }
         }
@@ -411,6 +411,22 @@ struct ArchivedPlaceholder: View {
 /// Git branch/changes and memory for a running tab, in one small line.
 /// Header of a folder group: colored name, how many sessions, and what's working or waiting —
 /// still visible when the group is collapsed.
+/// A collapsible section's title; clicking anywhere on it (not just the arrow) expands or collapses it.
+struct SectionHeader: View {
+    let title: String
+    let icon: String
+    @Binding var expanded: Bool
+
+    var body: some View {
+        HStack {
+            Label(title, systemImage: icon)
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation { expanded.toggle() } }
+    }
+}
+
 struct FolderGroupHeader: View {
     @ObservedObject var store: DeckStore
     let key: String
@@ -779,8 +795,10 @@ struct ResumeSheet: View {
     @State private var folder: String = AppActions.lastFolder
     @State private var quitOriginal = true
     @State private var searched = false
+    @State private var lastInFolder: HistoryItem?
 
     private var command: ResumeCommand { ResumeCommand.parse(text) }
+    private var continuing: Bool { command.sessionId == nil && command.continueLast }
     private var match: SessionLookup? { matches.first { $0.sessionId == chosen } ?? (matches.count == 1 ? matches[0] : nil) }
     private var runningElsewhere: Bool {
         guard let id = match?.sessionId else { return false }
@@ -790,7 +808,7 @@ struct ResumeSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Resume a session").font(.title2.bold())
-            Text("Paste a claude command or just a session ID. Flags like --permission-mode are kept and reused whenever this tab restarts.")
+            Text("Paste a claude command or just a session ID; claude --continue picks up the folder's last conversation. Flags like --permission-mode are kept and reused whenever this tab restarts.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -805,7 +823,7 @@ struct ResumeSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(command.sessionId == nil ? "Start New Session" : "Resume", action: go)
+                Button(command.sessionId != nil ? "Resume" : continuing && lastInFolder != nil ? "Continue" : "Start New Session", action: go)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canGo)
             }
@@ -828,6 +846,11 @@ struct ResumeSheet: View {
             if let cwd = match?.cwd { folder = cwd }
             searched = true
         }
+        .task(id: continuing ? folder : "") {
+            guard continuing else { lastInFolder = nil; return }
+            let dir = folder
+            lastInFolder = await Task.detached { HistoryScanner.lastSession(in: dir) }.value
+        }
     }
 
     @ViewBuilder private var details: some View {
@@ -839,7 +862,14 @@ struct ResumeSheet: View {
             }
             if command.sessionId == nil {
                 LabeledContent("Folder") { folderPicker }
-                Text("No session ID given, so this starts a new session.").font(.callout).foregroundStyle(.secondary)
+                if !continuing {
+                    Text("No session ID given, so this starts a new session.").font(.callout).foregroundStyle(.secondary)
+                } else if let last = lastInFolder {
+                    LabeledContent("Continues") { Text(store.historyName(last)).lineLimit(1) }
+                    Text("The most recent conversation in this folder.").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("No earlier conversation in this folder, so this starts a new session.").font(.callout).foregroundStyle(.secondary)
+                }
             } else if !searched {
                 ProgressView().controlSize(.small)
             } else if matches.isEmpty {
@@ -889,6 +919,11 @@ struct ResumeSheet: View {
     private func go() {
         guard canGo else { return }
         var cmd = command
+        if continuing {
+            store.continueLast(in: folder, args: cmd.args)
+            dismiss()
+            return
+        }
         if let m = match { cmd.sessionId = m.sessionId }
         store.resume(cmd, cwd: folder, quitOriginal: quitOriginal)
         dismiss()
@@ -940,7 +975,7 @@ struct HistoryList: View {
                 Section(isExpanded: $pinnedExpanded) {
                     ForEach(pinned) { row($0) }
                         .onMove { history.movePinned(from: $0, to: $1, visible: pinned.map(\.id)) }
-                } header: { Label("Pinned (\(pinned.count))", systemImage: "pin.fill") }
+                } header: { SectionHeader(title: "Pinned (\(pinned.count))", icon: "pin.fill", expanded: $pinnedExpanded) }
             }
             Section {
                 ForEach(rest) { row($0) }

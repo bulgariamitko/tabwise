@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- Continue the last conversation in a folder, like `claude --continue`: a checkbox when picking a folder for a
+  new session, File → Continue Last Session in Folder… (⌘O), or paste `claude --continue` into Resume
+- Click a Pinned or Archived section title (not just the arrow) to expand or collapse it
+- Drafts (unsent prompts) are no longer lost when a tab sleeps, restarts, is archived or closed: they're typed
+  back once Claude is ready, retrying until they show up
+- Fix "Draft" staying on a renamed session forever (the session name in the input box border hid the box)
+
 ## 0.1.3
 
 - Keyboard shortcuts for tab actions, also shown in the right-click menu: ⌘S sleep / wake,

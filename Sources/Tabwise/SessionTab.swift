@@ -78,6 +78,9 @@ final class SessionTab: ObservableObject, Identifiable {
     @Published var draft: String?
     /// A draft saved last time, waiting to be typed back once Claude is ready.
     var pendingDraft: String?
+    /// Typing a draft back is retried until it shows up in the input box.
+    var draftRestoreTries = 0
+    var lastDraftRestore = Date.distantPast
     @Published var git: GitInfo?
 
     let terminal: DropTerminalView
@@ -167,7 +170,7 @@ final class SessionTab: ObservableObject, Identifiable {
     /// Stops the session to free memory; the tab stays and resumes where it was when opened again.
     func sleep() {
         guard status != .notStarted, !archived else { return }
-        if let draft { pendingDraft = draft } // typed-but-unsent text comes back on wake
+        stashDraft() // typed-but-unsent text comes back on wake
         status = .notStarted
         terminate()
         claudePid = nil
@@ -182,9 +185,22 @@ final class SessionTab: ObservableObject, Identifiable {
     }
 
     func restart() {
+        stashDraft()
         terminate()
         terminal.getTerminal().resetToInitialState()
         start()
+    }
+
+    /// Before Claude is stopped: keep what's typed in its input box, to type it back when the session starts again.
+    func stashDraft() {
+        guard pendingDraft == nil else { return } // an earlier draft hasn't been typed back yet; keep that one
+        // Read the box right now: the periodic scan may be a couple of seconds behind your typing.
+        if claudePid != nil, status == .idle || status == .working, let text = DraftReader.read(terminal.getTerminal()) {
+            draft = text.isEmpty ? nil : text
+        }
+        pendingDraft = draft
+        draftRestoreTries = 0
+        lastDraftRestore = .distantPast
     }
 
     func terminate() {

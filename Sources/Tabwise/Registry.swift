@@ -104,6 +104,8 @@ struct ResumeCommand: Equatable {
     var sessionId: String?
     /// Flags to keep, without the resume/continue/print ones.
     var args: [String] = []
+    /// `--continue` / `-c` without an ID: pick up the folder's most recent conversation.
+    var continueLast = false
 
     static func parse(_ input: String) -> ResumeCommand {
         var tokens = tokenize(input.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -115,7 +117,9 @@ struct ResumeCommand: Equatable {
             switch t {
             case "--resume", "-r", "--session-id":
                 if i + 1 < tokens.count, !tokens[i + 1].hasPrefix("-") { result.sessionId = tokens[i + 1]; i += 1 }
-            case "--continue", "-c", "--print", "-p":
+            case "--continue", "-c":
+                result.continueLast = true
+            case "--print", "-p":
                 break
             default:
                 if t.hasPrefix("--resume=") { result.sessionId = String(t.dropFirst(9)) }

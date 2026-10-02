@@ -142,6 +142,29 @@ enum HistoryScanner {
     }
 
     /// Best effort when a transcript has no cwd: "-Users-me-code-app" → "/Users/me/code/app".
+    /// The conversation `claude --continue` would pick in `folder`: the most recently written one you typed in
+    /// (automated `claude -p` runs are skipped).
+    static func lastSession(in folder: String) -> HistoryItem? {
+        let folder = URL(fileURLWithPath: folder).standardizedFileURL.path
+        let encoded = String(folder.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
+        let dir = Registry.projectsDir.appendingPathComponent(encoded)
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(keys))) ?? [])
+            .filter { $0.pathExtension == "jsonl" }
+            .compactMap { url -> (URL, Date, Int)? in
+                guard let v = try? url.resourceValues(forKeys: keys), let mtime = v.contentModificationDate,
+                      let size = v.fileSize, size > 0 else { return nil }
+                return (url, mtime, size)
+            }
+            .sorted { $0.1 > $1.1 }
+        for (url, mtime, size) in files.prefix(50) {
+            guard let item = read(url, mtime: mtime, size: size), item.entrypoint != "sdk-cli", item.firstPrompt != nil,
+                  item.cwd.map({ URL(fileURLWithPath: $0).standardizedFileURL.path }) == folder else { continue }
+            return item
+        }
+        return nil
+    }
+
     private static func decodeFolder(_ encoded: String) -> String? {
         encoded.hasPrefix("-") ? encoded.replacingOccurrences(of: "-", with: "/") : nil
     }

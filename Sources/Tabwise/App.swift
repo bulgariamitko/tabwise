@@ -25,8 +25,26 @@ enum AppActions {
         return url.path
     }
 
-    static func newSession(_ store: DeckStore) {
-        if let dir = pickFolder(title: "Choose a folder to start Claude in") { store.newClaude(in: dir) }
+    /// New session: pick a folder, optionally continuing its last conversation (a checkbox in the panel).
+    static func newSession(_ store: DeckStore, continueLast: Bool = false) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.message = "Choose a folder to start Claude in"
+        panel.prompt = "Open"
+        panel.directoryURL = URL(fileURLWithPath: lastFolder)
+        let checkbox = NSButton(checkboxWithTitle: "Continue the last conversation in this folder (claude --continue)",
+                                target: nil, action: nil)
+        checkbox.state = continueLast ? .on : .off
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: checkbox.fittingSize.width + 40, height: checkbox.fittingSize.height + 16))
+        checkbox.frame.origin = NSPoint(x: 20, y: 8)
+        accessory.addSubview(checkbox)
+        panel.accessoryView = accessory
+        panel.isAccessoryViewDisclosed = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        lastFolder = url.path
+        if checkbox.state == .on { store.continueLast(in: url.path) } else { store.newClaude(in: url.path) }
     }
 
     static func newShell(_ store: DeckStore) {
@@ -166,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // MARK: Menu actions
 
     @objc func newSession(_ sender: Any?) { AppActions.newSession(store) }
+    @objc func continueSession(_ sender: Any?) { AppActions.newSession(store, continueLast: true) }
     @objc func newSessionHere(_ sender: Any?) {
         if store.sidebarMode == .history, let id = store.selectedHistoryID,
            let item = store.history.items.first(where: { $0.id == id }) {
@@ -440,6 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add(file, "New Claude Session in Same Folder", #selector(newSessionHere(_:)), "t", [.command, .control], target: self)
         add(file, "New Shell Tab", #selector(newShell(_:)), "t", [.command, .option], target: self)
         file.addItem(.separator())
+        add(file, "Continue Last Session in Folder…", #selector(continueSession(_:)), "o", target: self)
         add(file, "Resume Session…", #selector(resumeSession(_:)), "r", target: self)
         add(file, "Import Sessions…", #selector(importSessions(_:)), "i", [.command, .shift], target: self)
         file.addItem(.separator())
