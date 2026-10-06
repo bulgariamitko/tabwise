@@ -140,7 +140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) { store.appBecameActive() }
+    func applicationDidBecomeActive(_ notification: Notification) { store.appBecameActive(); ActiveSession.publish(store) }
+    func applicationDidResignActive(_ notification: Notification) { ActiveSession.publish(store) }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let working = store.tabs.filter { $0.status == .working }

@@ -37,6 +37,12 @@ enum DeckSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "keepAwake") }
     }
 
+    /// Start the sessions that were running when the app last quit; on by default.
+    static var restartRunning: Bool {
+        get { UserDefaults.standard.object(forKey: "restartRunning") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "restartRunning") }
+    }
+
     /// Archive running sessions idle for this many days (0 = never).
     static var autoArchiveDays: Int {
         get { UserDefaults.standard.integer(forKey: "autoArchiveDays") }
@@ -95,6 +101,7 @@ struct SettingsView: View {
     @State private var archiveDays = DeckSettings.autoArchiveDays
     @State private var statusLine = DeckSettings.builtInStatusLine
     @State private var keepAwake = DeckSettings.keepAwake
+    @State private var restartRunning = DeckSettings.restartRunning
     @State private var newPrompt = ""
 
     var body: some View {
@@ -105,6 +112,10 @@ struct SettingsView: View {
                     .onSubmit { DeckSettings.defaultCommand = command }
                     .onChange(of: command) { _, v in DeckSettings.defaultCommand = v }
                 Text("Used for every new, resumed and restored session, unless a tab was opened with its own flags (e.g. via Resume).")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Reopen running sessions at launch", isOn: $restartRunning)
+                    .onChange(of: restartRunning) { _, v in DeckSettings.restartRunning = v }
+                Text("Sessions that were running when you quit start again. Off: only the selected tab starts; the rest wait until you open them.")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("Auto-archive idle sessions", selection: $archiveDays) {
                     Text("Never").tag(0)

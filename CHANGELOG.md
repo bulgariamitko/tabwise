@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+- Sessions that were running when you quit start again at launch, not just the selected one
+  (Settings → Sessions → Reopen running sessions at launch)
+- The selected session is published to `~/.claude/tabwise/active.json` (sessionId, visibleSessionIds,
+  isAppActive, pid, updatedAt) so other tools, like a mod that reads replies aloud, can follow the tab you're on
+
 ## 0.1.5
 
 - Show only active sessions (green dot): the ⚡ button at the top of the sidebar, or "Only Active Sessions" in

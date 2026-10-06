@@ -18,6 +18,7 @@ final class DeckStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(splitID?.uuidString, forKey: "splitTab")
             tabs.first { $0.id == splitID }?.startIfNeeded()
+            ActiveSession.publish(self)
         }
     }
     @Published var splitVertical = UserDefaults.standard.object(forKey: "splitVertical") as? Bool ?? true {
@@ -65,6 +66,7 @@ final class DeckStore: ObservableObject {
     private var transcriptsBusy = false
     /// Called after every status poll (drives the menu bar icon).
     var onPolled: (() -> Void)?
+    private var shuttingDown = false
     private var saveScheduled = false
 
     static let stateURL: URL = {
@@ -164,6 +166,12 @@ final class DeckStore: ObservableObject {
             if selected == nil || selected?.archived == true { selectedID = ordered.first?.id }
             let savedSplit = UserDefaults.standard.string(forKey: "splitTab").flatMap(UUID.init)
             if let savedSplit, liveTabs.contains(where: { $0.id == savedSplit }), savedSplit != selectedID { splitID = savedSplit }
+            if DeckSettings.restartRunning {
+                // Start the rest of what was running at quit, a few at a time so launch stays smooth.
+                for (i, tab) in ordered.filter(\.wasRunning).enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1 + Double(i) * 0.7) { tab.startIfNeeded() }
+                }
+            }
         }
         if ProcessInfo.processInfo.environment["TABWISE_START_MODE"] == "history" { sidebarMode = .history }
         history.onRefreshed = { [weak self] items in self?.prompts.seedIfNeeded(from: items) }
@@ -419,6 +427,7 @@ final class DeckStore: ObservableObject {
         selected?.needsAttention = false
         updateBadge()
         UserDefaults.standard.set(selectedID?.uuidString, forKey: "selectedTab")
+        ActiveSession.publish(self)
     }
 
     /// ⌘J: the session that's been waiting for you the longest.
@@ -559,6 +568,7 @@ final class DeckStore: ObservableObject {
         if tick % 60 == 45 { backup.backupAppData(tabCount: tabs.count) }
         if tick % 3600 == 120 { backupConversationsNow() } // hourly (first run 2 min after launch)
         onPolled?()
+        ActiveSession.publish(self) // picks up new session ids (resume, /clear) and closed tabs
         // Cheap: only touches the disk when something actually changed.
         save()
     }
@@ -723,6 +733,7 @@ final class DeckStore: ObservableObject {
     }()
 
     func save() {
+        guard !shuttingDown else { return } // keep the "was running" flags written at quit
         let records = tabs.map { tab -> SavedTab in var r = tab.saved; r.title = nil; return r }
         guard let data = try? Self.encoder.encode(records), data != lastWritten else { return }
         let fm = FileManager.default
@@ -759,7 +770,9 @@ final class DeckStore: ObservableObject {
     }
 
     func shutdown() {
+        ActiveSession.publish(self, quitting: true)
         save()
+        shuttingDown = true
         backup.backupAppData(tabCount: tabs.count)
         for tab in tabs { tab.terminate() }
     }

@@ -50,6 +50,8 @@ struct SavedTab: Codable {
     var extraArgs: [String]?
     /// Unsent text in Claude's input box, typed back after a restart.
     var draft: String?
+    /// The session was running when last saved; started again on the next launch.
+    var running: Bool?
 }
 
 @MainActor
@@ -81,6 +83,8 @@ final class SessionTab: ObservableObject, Identifiable {
     @Published var draft: String?
     /// A draft saved last time, waiting to be typed back once Claude is ready.
     var pendingDraft: String?
+    /// Was running when the app last quit (see SavedTab.running).
+    var wasRunning = false
     /// Typing a draft back is retried until it shows up in the input box.
     var draftRestoreTries = 0
     var lastDraftRestore = Date.distantPast
@@ -121,13 +125,15 @@ final class SessionTab: ObservableObject, Identifiable {
         extraArgs = saved.extraArgs ?? []
         draft = saved.draft
         pendingDraft = saved.draft
+        wasRunning = saved.running ?? false
         if archived { status = .archived }
     }
 
     var saved: SavedTab {
         SavedTab(id: id, isClaude: isClaude, sessionId: sessionId, cwd: cwd, customName: customName, group: group,
                  title: displayName, color: color, pinned: pinned ? true : nil, archived: archived ? true : nil,
-                 lastActive: lastActive, extraArgs: extraArgs.isEmpty ? nil : extraArgs, draft: draft)
+                 lastActive: lastActive, extraArgs: extraArgs.isEmpty ? nil : extraArgs, draft: draft,
+                 running: status.isActive || status == .shell ? true : nil)
     }
 
     var displayName: String {
