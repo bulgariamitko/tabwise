@@ -272,7 +272,7 @@ if [ -n "$weekly_usage" ]; then
     [ -n "$REPLY" ] && line2+=" ${RESET_C}⏱${REPLY}${RST}"
   fi
 fi
-[ -n "$line2" ] && out+=$'\n'"$line2"
+[ -n "$line2" ] && out+="  $line2"
 
 # Line 3: cached, total tokens, git, session duration
 line3=""
@@ -306,6 +306,51 @@ if [ -n "$duration_ms" ] && [ "$duration_ms" -gt 0 ]; then
   line3+="⏱️ ${DUR_C}$((dur_sec / 3600))h $(((dur_sec % 3600) / 60))m${RST}"
 fi
 
-[ -n "$line3" ] && out+=$'\n'"$line3"
+[ -n "$line3" ] && out+="  $line3"
 
+# ---- wrap: one continuous line, broken between words only where it runs out of width ----
+# Claude Code cuts a status line at the window edge and passes the width in COLUMNS (minus its
+# 2-column indent; a little spare for emoji whose width terminals disagree on).
+ESC=$'\033'
+visible_width() {
+  local s="$1" plain="" rest
+  # strip color codes
+  while [[ "$s" == *"$ESC["* ]]; do
+    plain+="${s%%"$ESC["*}"; rest="${s#*"$ESC["}"; s="${rest#*m}"
+  done
+  plain+="$s"
+  plain="${plain//️/}"                              # emoji variation selector: no width
+  local narrow="${plain//[📁🤖🧠📟📈📦📊🌿⚡✅❌⏱]/}"  # these draw two columns wide
+  REPLY=$(( ${#plain} + ${#plain} - ${#narrow} ))
+  ICON_ONLY=0; [ -z "$narrow" ] && ICON_ONLY=1
+}
+
+wrap() {
+  local text="$1" max="$2" line="" width=0 word gap="" color="" result="" last
+  while :; do
+    if [[ "$text" == *" "* ]]; then word="${text%% *}"; text="${text#* }"; else word="$text"; text=""; fi
+    if [ -z "$word" ]; then gap+=" "; [ -z "$text" ] && break; continue; fi
+    visible_width "$word"
+    # an icon stays with the word after it (📊 Total, not 📊 at the end of a row)
+    if (( ICON_ONLY )) && [ -n "$text" ] && [ "${text:0:1}" != " " ]; then
+      if [[ "$text" == *" "* ]]; then word+=" ${text%% *}"; text="${text#* }"; else word+=" $text"; text=""; fi
+      visible_width "$word"
+    fi
+    if (( width > 0 && width + ${#gap} + REPLY > max )); then
+      result+="$line$RST"$'\n'; line="$color"; width=0; gap=""
+    fi
+    (( width == 0 )) && gap=""
+    line+="$gap$word"; width=$(( width + ${#gap} + REPLY )); gap=" "
+    # carry the color that's open at the end of this word onto a new row
+    if [[ "$word" == *"$ESC["*m* ]]; then
+      last="${word##*"$ESC["}"; last="${last%%m*}"
+      if [ "$last" = "0" ]; then color=""; else color="$ESC[${last}m"; fi
+    fi
+    [ -z "$text" ] && break
+  done
+  REPLY="$result$line"
+}
+
+max=$(( ${COLUMNS:-0} - 4 ))
+if (( max >= 20 )); then wrap "$out" "$max"; out=$REPLY; fi
 printf '%s\n' "$out"

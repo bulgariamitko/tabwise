@@ -1,7 +1,7 @@
 import Foundation
 
 /// Claude Code mods (plugin folders) shipped inside the app and loaded into every session Tabwise starts,
-/// via CLAUDE_CODE_PLUGIN_DIRS. Each mod is on unless you switch it off, including mods added in later releases.
+/// via --plugin-dir. Each mod is on unless you switch it off, including mods added in later releases.
 enum Mods {
     struct Mod: Identifiable, Hashable {
         let name: String
@@ -50,6 +50,27 @@ enum Mods {
 
     static var enabled: [Mod] { available().filter { isEnabled($0.name) } }
 
-    /// The "statusline" mod replaces Tabwise's built-in status line while it's on.
-    static var replacesStatusLine: Bool { enabled.contains { $0.name == "statusline" } }
+    /// Enabled mods' folders, minus mods Claude Code already loads from CLAUDE_CODE_PLUGIN_DIRS in your
+    /// settings.json env, so none loads twice.
+    static func toLoad() -> [String] {
+        var dirs = ""
+        let settings = Registry.claudeDir.appendingPathComponent("settings.json")
+        if let data = try? Data(contentsOf: settings),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let env = json["env"] as? [String: Any], let value = env["CLAUDE_CODE_PLUGIN_DIRS"] as? String {
+            dirs += ":" + value
+        }
+        let loaded = Set(dirs.split(separator: ":").map { pluginName(at: String($0)) })
+        return enabled.filter { !loaded.contains($0.name) }.map(\.path)
+    }
+
+    private static func pluginName(at dir: String) -> String {
+        let path = (dir as NSString).expandingTildeInPath
+        let manifest = URL(fileURLWithPath: path).appendingPathComponent(".claude-plugin/plugin.json")
+        if let data = try? Data(contentsOf: manifest),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let name = json["name"] as? String {
+            return name
+        }
+        return (path as NSString).lastPathComponent
+    }
 }

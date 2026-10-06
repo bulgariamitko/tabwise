@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+- The built-in status line is one continuous line that wraps onto the next row only when it runs out of width
+- Mods load reliably even when your settings.json sets CLAUDE_CODE_PLUGIN_DIRS (passed as --plugin-dir; a mod
+  your settings already load isn't loaded twice)
+
 ## 0.1.7
 
 - Mods: Claude Code plugins that ship with Tabwise and load into every session it starts. Switch each on or off
