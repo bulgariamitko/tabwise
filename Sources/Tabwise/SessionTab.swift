@@ -18,6 +18,9 @@ enum TabStatus: Equatable {
         case .notStarted: "Asleep — uses no memory; starts when you open it"
         }
     }
+
+    /// Claude is running: the green dot, or the spinner/orange dot it turns into while it works or needs you.
+    var isActive: Bool { [.starting, .working, .waiting, .idle].contains(self) }
 }
 
 /// Finder-style color label for a session.

@@ -77,7 +77,15 @@ struct Sidebar: View {
                     HStack(spacing: 8) {
                         StatusSummary(store: store)
                         Spacer(minLength: 4)
+                        Button { store.activeOnly.toggle() } label: {
+                            Image(systemName: store.activeOnly ? "bolt.circle.fill" : "bolt.circle")
+                                .foregroundStyle(store.activeOnly ? Color.accentColor : .secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(store.activeOnly ? "Showing only active sessions — click to show all" : "Show only active sessions (green dot)")
                         Menu {
+                            Toggle("Only Active Sessions", isOn: $store.activeOnly)
+                            Divider()
                             Picker("Sidebar", selection: $store.layout) {
                                 Text("Most Recent First").tag(DeckStore.Layout.recent)
                                 Text("Group by Folder").tag(DeckStore.Layout.projects)
@@ -102,7 +110,7 @@ struct Sidebar: View {
             if !store.pinnedTabs.isEmpty {
                 Section(isExpanded: $pinnedExpanded) {
                     ForEach(store.pinnedTabs) { tab in row(tab, ordered) }
-                        .onMove { store.movePinned(from: $0, to: $1) }
+                        .onMove(perform: store.activeOnly ? nil : { store.movePinned(from: $0, to: $1) })
                 } header: {
                     SectionHeader(title: "Pinned (\(store.pinnedTabs.count))", icon: "pin.fill", expanded: $pinnedExpanded)
                 }
@@ -120,7 +128,11 @@ struct Sidebar: View {
                     ForEach(store.recentTabs) { tab in row(tab, ordered) }
                 }
             }
-            if !store.archivedTabs.isEmpty {
+            if store.activeOnly {
+                let hidden = store.liveTabs.count - ordered.count
+                Button(hidden > 0 ? "\(hidden) inactive hidden — Show All" : "Show All") { store.activeOnly = false }
+                    .buttonStyle(.link).font(.caption).selectionDisabled()
+            } else if !store.archivedTabs.isEmpty {
                 Section(isExpanded: $archiveExpanded) {
                     ForEach(store.archivedTabs) { tab in row(tab, ordered) }
                 } header: {

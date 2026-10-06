@@ -99,12 +99,19 @@ final class DeckStore: ObservableObject {
         didSet { UserDefaults.standard.set(layout.rawValue, forKey: "sidebarLayout") }
     }
 
+    /// Sidebar shows only active sessions (green dot); hides asleep, exited and plain shell tabs.
+    @Published var activeOnly = UserDefaults.standard.bool(forKey: "sidebarActiveOnly") {
+        didSet { UserDefaults.standard.set(activeOnly, forKey: "sidebarActiveOnly") }
+    }
+
+    private func shown(_ tab: SessionTab) -> Bool { !activeOnly || tab.status.isActive || tab.id == selectedID }
+
     /// Pinned tabs, in the order you dragged them.
-    var pinnedTabs: [SessionTab] { tabs.filter { $0.pinned && !$0.archived } }
+    var pinnedTabs: [SessionTab] { tabs.filter { $0.pinned && !$0.archived && shown($0) } }
 
     /// Everything else that isn't archived, the session you last messaged first.
     var recentTabs: [SessionTab] {
-        tabs.filter { !$0.pinned && !$0.archived }.sorted { $0.lastActive > $1.lastActive }
+        tabs.filter { !$0.pinned && !$0.archived && shown($0) }.sorted { $0.lastActive > $1.lastActive }
     }
 
     /// Recent tabs grouped by project; the group you worked in most recently comes first.
@@ -383,7 +390,7 @@ final class DeckStore: ObservableObject {
 
     /// Drag-reorder inside the Pinned section (the other sections sort themselves by recency).
     func movePinned(from offsets: IndexSet, to destination: Int) {
-        var pinned = pinnedTabs
+        var pinned = tabs.filter { $0.pinned && !$0.archived }
         pinned.move(fromOffsets: offsets, toOffset: destination)
         tabs = pinned + tabs.filter { !($0.pinned && !$0.archived) }
         scheduleSave()

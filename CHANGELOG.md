@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+- Show only active sessions (green dot): the ⚡ button at the top of the sidebar, or "Only Active Sessions" in
+  the layout menu. Sessions stay visible while working or waiting for you; asleep, exited and shell tabs hide
+
 ## 0.1.4
 
 - Continue the last conversation in a folder, like `claude --continue`: a checkbox when picking a folder for a
