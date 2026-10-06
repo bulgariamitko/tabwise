@@ -40,6 +40,16 @@ cp build.noindex/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/statusline.sh "$APP/Contents/Resources/statusline.sh"   # built-in status line
 chmod +x "$APP/Contents/Resources/statusline.sh"
 
+# Claude Code mods (plugin folders) loaded into every session; dev-only files stay behind.
+MODS_DIR="${MODS_DIR:-$(cd .. && pwd)/mods}"
+if [ -d "$MODS_DIR" ]; then
+  for m in "$MODS_DIR"/*/; do
+    [ -f "$m.claude-plugin/plugin.json" ] || continue
+    rsync -a --exclude .claude-plugin/types --exclude tests --exclude tsconfig.json --exclude node_modules \
+      --exclude .git --exclude .DS_Store "$m" "$APP/Contents/Resources/mods/$(basename "$m")/"
+  done
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

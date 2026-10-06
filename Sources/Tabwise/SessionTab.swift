@@ -156,7 +156,7 @@ final class SessionTab: ObservableObject, Identifiable {
         if isClaude {
             let flags = extraArgs.isEmpty ? DeckSettings.defaultArgs : extraArgs
             var parts = ["claude"] + flags.map(ResumeCommand.shellQuote)
-            if DeckSettings.builtInStatusLine, let script = DeckSettings.statusLineScript,
+            if DeckSettings.builtInStatusLine, !Mods.replacesStatusLine, let script = DeckSettings.statusLineScript,
                let json = try? JSONSerialization.data(withJSONObject: [
                    "statusLine": ["type": "command", "command": ResumeCommand.shellQuote(script), "padding": 0],
                ]), let settings = String(data: json, encoding: .utf8) {
@@ -228,10 +228,14 @@ final class SessionTab: ObservableObject, Identifiable {
 
     private static func environment() -> [String] {
         var env = ProcessInfo.processInfo.environment
+        let pluginDirs = env["CLAUDE_CODE_PLUGIN_DIRS"]
         // Don't leak a parent Claude Code session's identity into child sessions.
         for key in env.keys where key.hasPrefix("CLAUDECODE") || key.hasPrefix("CLAUDE_CODE_") {
             env.removeValue(forKey: key)
         }
+        // Enabled mods load into every claude started from this terminal (added to any dirs already set).
+        let dirs = (pluginDirs.map { [$0] } ?? []) + Mods.enabled.map(\.path)
+        if !dirs.isEmpty { env["CLAUDE_CODE_PLUGIN_DIRS"] = dirs.filter { !$0.isEmpty }.joined(separator: ":") }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "Tabwise"

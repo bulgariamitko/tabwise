@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+- Mods: Claude Code plugins that ship with Tabwise and load into every session it starts. Switch each on or off
+  in Settings → Mods (all on by default). First mod: speak, which reads Claude's replies aloud
+
 ## 0.1.6
 
 - Sessions that were running when you quit start again at launch, not just the selected one

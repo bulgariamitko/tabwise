@@ -102,7 +102,62 @@ struct SettingsView: View {
     @State private var statusLine = DeckSettings.builtInStatusLine
     @State private var keepAwake = DeckSettings.keepAwake
     @State private var restartRunning = DeckSettings.restartRunning
+    @State private var mods = Mods.available()
+    @State private var modsDisabled = Mods.disabled
+    @State private var modsChanged = false
+    @State private var modsDevFolder = Mods.devFolder ?? ""
     @State private var newPrompt = ""
+
+    private var modsSection: some View {
+        Section("Mods") {
+            if mods.isEmpty {
+                Text("No mods found\(Mods.devFolder == nil ? " in this build" : " in \(Mods.devFolder!)").")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(mods) { mod in
+                Toggle(isOn: Binding(get: { !modsDisabled.contains(mod.name) }, set: { on in
+                    Mods.setEnabled(mod.name, on); modsDisabled = Mods.disabled; modsChanged = true
+                })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(mod.name)
+                        if !mod.description.isEmpty { Text(mod.description).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            HStack {
+                Text(modsChanged ? "Changes apply to new or restarted sessions." : "Claude Code plugins loaded into every session Tabwise starts.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if modsChanged {
+                    Button("Restart Idle Sessions") {
+                        for tab in store.tabs where tab.isClaude && !tab.archived && [.idle, .waiting].contains(tab.status) {
+                            tab.restart()
+                        }
+                        modsChanged = false
+                    }
+                    .help("Restarts every Claude tab that isn't working right now; working ones pick it up on their next restart")
+                }
+            }
+            DisclosureGroup("Advanced") {
+                Toggle("Load mods from folder", isOn: Binding(get: { !modsDevFolder.isEmpty }, set: { on in
+                    if on {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = true; panel.canChooseFiles = false
+                        panel.message = "Choose the folder that holds your mods (one subfolder per mod)"
+                        guard panel.runModal() == .OK, let url = panel.url else { return }
+                        modsDevFolder = url.path
+                    } else {
+                        modsDevFolder = ""
+                    }
+                    Mods.devFolder = modsDevFolder.isEmpty ? nil : modsDevFolder
+                    mods = Mods.available(); modsChanged = true
+                }))
+                Text(modsDevFolder.isEmpty ? "For mod development: use a folder instead of the mods inside the app, so edits apply without a new release."
+                                           : modsDevFolder)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
 
     var body: some View {
         Form {
@@ -133,6 +188,7 @@ struct SettingsView: View {
                 Text("Shows model, effort, rate limits, tokens, git and session time under Claude's input box. Applies to sessions started or restarted after changing it. Turn off to use your own Claude Code status line setting.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            modsSection
             Section("Backup") {
                 Toggle("Back up to \(destination)", isOn: $backupOn)
                     .onChange(of: backupOn) { _, v in BackupManager.enabled = v }
