@@ -108,6 +108,66 @@ final class DeckStore: ObservableObject {
 
     private func shown(_ tab: SessionTab) -> Bool { !activeOnly || tab.status.isActive || tab.id == selectedID }
 
+    // MARK: Search (one box, the same in Open and All Sessions)
+
+    @Published var search = ""
+    /// ⌘F: bumped to put the cursor in the sidebar's search box.
+    @Published var searchFocusRequest = 0
+    @Published var deepSearch = UserDefaults.standard.bool(forKey: "historyDeepSearch") {
+        didSet { UserDefaults.standard.set(deepSearch, forKey: "historyDeepSearch") }
+    }
+    /// Session id → snippet, for conversations whose full text matches (when deepSearch is on).
+    @Published private(set) var deepResults: [String: String] = [:]
+    @Published private(set) var deepSearching = false
+
+    var searchQuery: String { search.trimmingCharacters(in: .whitespaces).lowercased() }
+    var isSearching: Bool { !searchQuery.isEmpty }
+
+    /// The full-text snippet to show for a session, while a deep search is on.
+    func searchHit(_ sessionId: String?) -> String? {
+        guard isSearching, deepSearch, let sessionId else { return nil }
+        return deepResults[sessionId]
+    }
+
+    func matches(_ item: HistoryItem) -> Bool {
+        let q = searchQuery
+        guard !q.isEmpty else { return true }
+        return item.id.hasPrefix(q) || searchHit(item.id) != nil
+            || historyName(item).lowercased().contains(q)
+            || (item.cwd ?? "").lowercased().contains(q)
+            || (item.firstPrompt ?? "").lowercased().contains(q)
+            || (item.lastPrompt ?? "").lowercased().contains(q)
+            || (history.note(item.id) ?? "").lowercased().contains(q)
+    }
+
+    func matches(_ tab: SessionTab, items: [String: HistoryItem]) -> Bool {
+        let q = searchQuery
+        guard !q.isEmpty else { return true }
+        if tab.displayName.lowercased().contains(q) || tab.cwd.lowercased().contains(q)
+            || (tab.group ?? "").lowercased().contains(q) { return true }
+        guard let id = tab.sessionId else { return false }
+        if let item = items[id] { return matches(item) }
+        return id.hasPrefix(q) || searchHit(id) != nil || (history.note(id) ?? "").lowercased().contains(q)
+    }
+
+    /// Full-text search over every conversation, debounced; cancelled when the query changes.
+    func runDeepSearch() async {
+        let q = searchQuery
+        guard deepSearch, q.count >= 3 else { deepResults = [:]; deepSearching = false; return }
+        try? await Task.sleep(for: .milliseconds(350))
+        if Task.isCancelled { return }
+        deepSearching = true
+        let showEmpty = UserDefaults.standard.bool(forKey: "historyShowEmpty")
+        let open = Set(tabs.compactMap(\.sessionId))
+        let files = history.items
+            .filter { showEmpty || !$0.isTrivial || history.isPinned($0.id) || open.contains($0.id) }
+            .map { ($0.id, $0.path) }
+        let found = await Task.detached(priority: .userInitiated) { FullTextSearch.search(q, in: files) }.value
+        if Task.isCancelled { return }
+        deepResults = found
+        deepSearching = false
+    }
+
     /// Pinned tabs, in the order you dragged them.
     var pinnedTabs: [SessionTab] { tabs.filter { $0.pinned && !$0.archived && shown($0) } }
 

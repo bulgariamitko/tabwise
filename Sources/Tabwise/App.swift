@@ -224,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
     @objc func showAllSessions(_ sender: Any?) { store.sidebarMode = .history }
+    @objc func findSessions(_ sender: Any?) { store.searchFocusRequest += 1 }
     @objc func setLayout(_ sender: NSMenuItem) {
         store.layout = sender.tag == 1 ? .projects : .recent
     }
@@ -494,6 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let view = submenu("View")
         add(view, "Open Tabs", #selector(showOpenTabs(_:)), "1", [.command, .option], target: self)
         add(view, "All Sessions", #selector(showAllSessions(_:)), "2", [.command, .option], target: self)
+        add(view, "Search Sessions", #selector(findSessions(_:)), "f", [.command], target: self)
         view.addItem(.separator())
         add(view, "Split View with Next Tab", #selector(toggleSplit(_:)), "d", target: self)
         add(view, "Side by Side / Stacked", #selector(toggleSplitOrientation(_:)), "d", [.command, .shift], target: self)

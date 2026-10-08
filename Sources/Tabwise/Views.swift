@@ -65,6 +65,7 @@ struct Sidebar: View {
         Group {
             if store.sidebarMode == .open { openList } else { HistoryList(store: store, history: store.history) }
         }
+        .task(id: "\(store.deepSearch)|\(store.search)") { await store.runDeepSearch() }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 6) {
                 Picker("", selection: $store.sidebarMode) {
@@ -106,41 +107,64 @@ struct Sidebar: View {
 
     private var openList: some View {
         let ordered = store.ordered
+        // Search: the same box as All Sessions; open tabs that match, then matching sessions that aren't open.
+        let searching = store.isSearching
+        let items = Dictionary(store.history.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let match = { (tab: SessionTab) in store.matches(tab, items: items) }
+        let pinned = store.pinnedTabs.filter(match)
+        let recent = store.recentTabs.filter(match)
+        let groups = store.projectGroups.map { (key: $0.key, tabs: $0.tabs.filter(match)) }.filter { !$0.tabs.isEmpty }
+        let archived = store.archivedTabs.filter(match)
+        let notOpen = searching ? store.history.items
+            .filter { store.openTab(for: $0.id) == nil && (!$0.isTrivial || store.history.isPinned($0.id)) && store.matches($0) }
+            .sorted { $0.lastActive > $1.lastActive } : []
         return List(selection: $store.selectedID) {
-            if !store.pinnedTabs.isEmpty {
-                Section(isExpanded: $pinnedExpanded) {
-                    ForEach(store.pinnedTabs) { tab in row(tab, ordered) }
-                        .onMove(perform: store.activeOnly ? nil : { store.movePinned(from: $0, to: $1) })
+            if !pinned.isEmpty {
+                Section(isExpanded: searching ? .constant(true) : $pinnedExpanded) {
+                    ForEach(pinned) { tab in row(tab, ordered) }
+                        .onMove(perform: store.activeOnly || searching ? nil : { store.movePinned(from: $0, to: $1) })
                 } header: {
-                    SectionHeader(title: "Pinned (\(store.pinnedTabs.count))", icon: "pin.fill", expanded: $pinnedExpanded)
+                    SectionHeader(title: "Pinned (\(pinned.count))", icon: "pin.fill", expanded: $pinnedExpanded)
                 }
             }
             if store.layout == .projects {
-                ForEach(store.projectGroups, id: \.key) { group in
-                    Section(isExpanded: store.groupExpanded(group.key)) {
+                ForEach(groups, id: \.key) { group in
+                    Section(isExpanded: searching ? .constant(true) : store.groupExpanded(group.key)) {
                         ForEach(group.tabs) { tab in row(tab, ordered) }
                     } header: {
                         FolderGroupHeader(store: store, key: group.key, tabs: group.tabs)
                     }
                 }
-            } else if !store.recentTabs.isEmpty {
+            } else if !recent.isEmpty {
                 Section("Recent") {
-                    ForEach(store.recentTabs) { tab in row(tab, ordered) }
+                    ForEach(recent) { tab in row(tab, ordered) }
                 }
             }
             if store.activeOnly {
                 let hidden = store.liveTabs.count - ordered.count
                 Button(hidden > 0 ? "\(hidden) inactive hidden — Show All" : "Show All") { store.activeOnly = false }
                     .buttonStyle(.link).font(.caption).selectionDisabled()
-            } else if !store.archivedTabs.isEmpty {
-                Section(isExpanded: $archiveExpanded) {
-                    ForEach(store.archivedTabs) { tab in row(tab, ordered) }
+            } else if !archived.isEmpty {
+                Section(isExpanded: searching ? .constant(true) : $archiveExpanded) {
+                    ForEach(archived) { tab in row(tab, ordered) }
                 } header: {
-                    SectionHeader(title: "Archived (\(store.archivedTabs.count))", icon: "archivebox", expanded: $archiveExpanded)
+                    SectionHeader(title: "Archived (\(archived.count))", icon: "archivebox", expanded: $archiveExpanded)
                 }
+            }
+            if !notOpen.isEmpty {
+                Section {
+                    ForEach(notOpen.prefix(100)) { item in ClosedSessionRow(store: store, item: item) }
+                } header: {
+                    Label("Not Open (\(notOpen.count))", systemImage: "clock.arrow.circlepath")
+                }
+            }
+            if searching && pinned.isEmpty && recent.isEmpty && groups.isEmpty && archived.isEmpty && notOpen.isEmpty {
+                Text(store.deepSearching ? "Searching…" : "No sessions match “\(store.search)”")
+                    .font(.callout).foregroundStyle(.secondary).selectionDisabled()
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 4) { SearchBar(store: store) { EmptyView() } }
         .animation(.default, value: ordered.map(\.id))
         .overlay {
             if dropTargeted {
@@ -210,7 +234,7 @@ struct Sidebar: View {
     private func row(_ tab: SessionTab, _ ordered: [SessionTab]) -> some View {
         TabRow(tab: tab, index: ordered.firstIndex { $0.id == tab.id }, note: store.history.note(tab.sessionId),
                isSplit: store.splitID == tab.id && store.selectedID != tab.id,
-               folderColor: store.folderColors.color(for: tab.cwd))
+               folderColor: store.folderColors.color(for: tab.cwd), hit: store.searchHit(tab.sessionId))
             .tag(tab.id)
             .contextMenu { menu(for: tab) }
             .listRowBackground(tab.color.map { c in
@@ -307,6 +331,8 @@ struct TabRow: View {
     var note: String? = nil
     var isSplit = false
     var folderColor: Color = .secondary
+    /// Where a full-text search matched this conversation.
+    var hit: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -343,7 +369,9 @@ struct TabRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 TabMeta(tab: tab)
-                if let preview = tab.transcript.preview {
+                if let hit {
+                    Text(hit).font(.caption).foregroundStyle(.orange.opacity(0.9)).lineLimit(2)
+                } else if let preview = tab.transcript.preview {
                     Text((tab.transcript.previewIsUser ? "You: " : "") + preview)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -942,12 +970,78 @@ struct ResumeSheet: View {
     }
 }
 
+// MARK: Search
+
+/// The sidebar's search box, shared by Open and All Sessions: the same query and options in both.
+struct SearchBar<Trailing: View>: View {
+    @ObservedObject var store: DeckStore
+    @ViewBuilder var trailing: Trailing
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search all sessions, open or not", text: $store.search).textFieldStyle(.plain)
+                .focused($focused)
+                .onChange(of: store.searchFocusRequest) { focused = true }
+                .onExitCommand { store.search = ""; focused = false }
+            if store.deepSearching { ProgressView().controlSize(.mini) }
+            if !store.search.isEmpty {
+                Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.borderless)
+            }
+            Button { store.deepSearch.toggle() } label: {
+                Image(systemName: "text.magnifyingglass").foregroundStyle(store.deepSearch ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(store.deepSearch ? "Searching inside whole conversations (click to search names only)"
+                                   : "Search inside whole conversations too")
+            trailing
+        }
+        .padding(6)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 12)
+    }
+}
+
+/// A search result in the Open list for a conversation that isn't open in a tab; clicking resumes it.
+struct ClosedSessionRow: View {
+    @ObservedObject var store: DeckStore
+    let item: HistoryItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle().stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                .frame(width: 8, height: 8).padding(.top, 5).frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.historyName(item)).lineLimit(1)
+                if let note = store.history.note(item.id) { NoteLabel(note: note) }
+                HStack(spacing: 4) {
+                    FolderLabel(text: item.folderName, color: store.folderColors.color(for: item.cwd))
+                    Spacer(minLength: 4)
+                    Text(TabRow.relative(item.lastActive)).fixedSize()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if let hit = store.searchHit(item.id) {
+                    Text(hit).font(.caption).foregroundStyle(.orange.opacity(0.9)).lineLimit(2)
+                } else if let last = item.lastPrompt {
+                    Text("You: " + last).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture { store.resumeHistory(item) }
+        .help("Not open — click to resume it in a new tab")
+        .selectionDisabled()
+    }
+}
+
 // MARK: All Sessions
 
 struct HistoryList: View {
     @ObservedObject var store: DeckStore
     @ObservedObject var history: HistoryStore
-    @State private var search = ""
     @State private var project: String?
     @AppStorage("historyShowEmpty") private var showEmpty = false
     @AppStorage("historyPinnedExpanded") private var pinnedExpanded = true
@@ -955,30 +1049,18 @@ struct HistoryList: View {
     @State private var renameText = ""
     @State private var notingItem: HistoryItem?
     @State private var noteText = ""
-    @AppStorage("historyDeepSearch") private var deepSearch = false
-    @State private var deepResults: [String: String] = [:]
-    @State private var deepSearching = false
 
     private var filtered: [HistoryItem] {
-        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        let deep = deepSearch && q.count >= 3
-        return history.items
+        history.items
             .filter { showEmpty || !$0.isTrivial }
             .filter { project == nil || $0.cwd == project }
-            .filter { item in
-                q.isEmpty || item.id.hasPrefix(q) || (deep && deepResults[item.id] != nil)
-                    || store.historyName(item).lowercased().contains(q)
-                    || (item.cwd ?? "").lowercased().contains(q)
-                    || (item.firstPrompt ?? "").lowercased().contains(q)
-                    || (item.lastPrompt ?? "").lowercased().contains(q)
-            }
+            .filter(store.matches)
     }
 
     var body: some View {
         let all = filtered
         // Pinned sessions stay visible even if they'd be hidden for having one message.
-        let q = search.trimmingCharacters(in: .whitespaces)
-        let pinPool = q.isEmpty && project == nil ? history.items : all
+        let pinPool = !store.isSearching && project == nil ? history.items : all
         let byId = Dictionary(pinPool.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let pinned = history.meta.pinned.compactMap { byId[$0] }
         let rest = all.filter { !history.isPinned($0.id) }.sorted { $0.lastActive > $1.lastActive }
@@ -1001,28 +1083,8 @@ struct HistoryList: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search names, prompts, folders, IDs", text: $search).textFieldStyle(.plain)
-                if deepSearching { ProgressView().controlSize(.mini) }
-                if !search.isEmpty {
-                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.borderless)
-                }
-                Button { deepSearch.toggle() } label: {
-                    Image(systemName: "text.magnifyingglass").foregroundStyle(deepSearch ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(deepSearch ? "Searching inside whole conversations (click to search names only)"
-                                 : "Search inside whole conversations too")
-                filterMenu
-            }
-            .padding(6)
-            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
-            .padding(.horizontal, 12)
-        }
+        .safeAreaInset(edge: .top, spacing: 4) { SearchBar(store: store) { filterMenu } }
         .onAppear { history.refresh() }
-        .task(id: "\(deepSearch)|\(search)|\(showEmpty)") { await runDeepSearch() }
         .alert("Rename session", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
             Button("Rename") {
@@ -1040,20 +1102,6 @@ struct HistoryList: View {
             Button("Remove Note") { if let item = notingItem { history.setNote(item.id, nil) } }
             Button("Cancel", role: .cancel) {}
         }
-    }
-
-    /// Full-text search over the listed conversations, debounced; cancelled when the query changes.
-    private func runDeepSearch() async {
-        let q = search.trimmingCharacters(in: .whitespaces)
-        guard deepSearch, q.count >= 3 else { deepResults = [:]; deepSearching = false; return }
-        try? await Task.sleep(for: .milliseconds(350))
-        if Task.isCancelled { return }
-        deepSearching = true
-        let files = history.items.filter { showEmpty || !$0.isTrivial || history.isPinned($0.id) }.map { ($0.id, $0.path) }
-        let found = await Task.detached(priority: .userInitiated) { FullTextSearch.search(q, in: files) }.value
-        if Task.isCancelled { return }
-        deepResults = found
-        deepSearching = false
     }
 
     private var filterMenu: some View {
@@ -1097,7 +1145,7 @@ struct HistoryList: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                if let hit = deepSearch ? deepResults[item.id] : nil {
+                if let hit = store.searchHit(item.id) {
                     Text(hit).font(.caption).foregroundStyle(.orange.opacity(0.9)).lineLimit(2)
                 } else if let last = item.lastPrompt {
                     Text("You: " + last).font(.caption).foregroundStyle(.tertiary).lineLimit(1)

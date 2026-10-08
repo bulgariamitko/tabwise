@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9
+
+- One search box for Open and All Sessions (⌘F): it keeps the same query in both, and in Open it also lists
+  matching sessions that aren't open (click to resume). The full-text option searches inside every conversation
+- speak mod: `/speak stop` and ■ Stop turn speaking off in every session until `/speak on`, and stop for real
+  (it no longer comes back with the next sentence Claude writes)
+
 ## 0.1.8
 
 - The built-in status line is one continuous line that wraps onto the next row only when it runs out of width
