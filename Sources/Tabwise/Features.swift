@@ -229,7 +229,7 @@ struct SettingsView: View {
                 HStack {
                     Button("Restore Conversations from Backup") { backup.restore {} }
                         .disabled(BackupManager.readManifest() == nil || backup.restoreProgress != nil)
-                    if let root = BackupManager.root, FileManager.default.fileExists(atPath: root.path) {
+                    if let root = BackupManager.root, Bounded.exists(root.path) {
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
                     }
                 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.10
+
+- No more freezes when Dropbox, iCloud Drive or another cloud folder stalls: reading mods, checking that a
+  session's folder exists and checking the backup now give up after a moment instead of hanging the app
+
 ## 0.1.9
 
 - One search box for Open and All Sessions (⌘F): it keeps the same query in both, and in Open it also lists

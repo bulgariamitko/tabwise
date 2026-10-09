@@ -1157,7 +1157,7 @@ struct HistoryList: View {
         .contextMenu {
             Button(open == nil ? "Resume in New Tab" : "Go to Tab") { store.resumeHistory(item) }
             Button("Start New Session in This Folder") { store.newSession(inFolderOf: item.cwd) }
-                .disabled(item.cwd.map { !FileManager.default.fileExists(atPath: $0) } ?? true)
+                .disabled(item.cwd.map { !Bounded.exists($0) } ?? true)
             Button(history.isPinned(item.id) ? "Unpin" : "Pin to Top") { history.togglePin(item.id) }
             Button("Rename…") { renameText = store.historyName(item); renaming = item }
             FolderColorMenu(colors: store.folderColors, path: item.cwd)
@@ -1201,7 +1201,7 @@ struct HistoryDetail: View {
     }
 
     private func detail(_ item: HistoryItem) -> some View {
-        let folderExists = item.cwd.map { FileManager.default.fileExists(atPath: $0) } ?? false
+        let folderExists = item.cwd.map { Bounded.exists($0) } ?? false
         let open = store.openTab(for: item.id)
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {

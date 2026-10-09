@@ -43,7 +43,7 @@ final class BackupManager: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "backupFolder") }
     }
 
-    static var iCloudAvailable: Bool { FileManager.default.fileExists(atPath: iCloudDrive.path) }
+    static var iCloudAvailable: Bool { Bounded.exists(iCloudDrive.path) }
 
     /// Where backups go, or nil if iCloud Drive is off and no other folder was chosen.
     static var root: URL? {
@@ -201,7 +201,10 @@ final class BackupManager: ObservableObject {
     static func readManifest() -> Manifest? { readManifest(root) }
 
     static func readManifest(_ root: URL?) -> Manifest? {
-        guard let root, let data = try? Data(contentsOf: root.appendingPathComponent("manifest.json")) else { return nil }
+        // The backup lives in iCloud Drive or a folder like Dropbox, whose reads can stall: wait at most 2 s.
+        guard let root, let data = Bounded.run(timeout: 2, fallback: nil, {
+            try? Data(contentsOf: root.appendingPathComponent("manifest.json"))
+        }) else { return nil }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         return try? dec.decode(Manifest.self, from: data)

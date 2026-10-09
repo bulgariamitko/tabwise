@@ -20,8 +20,25 @@ enum Mods {
 
     static var folder: URL? { devFolder.map { URL(fileURLWithPath: $0) } ?? bundledFolder }
 
-    /// Every folder holding .claude-plugin/plugin.json, by name.
+    private static let lock = NSLock()
+    private static var lastFound: [Mod]?
+
+    /// Every folder holding .claude-plugin/plugin.json, by name. The folder may be in Dropbox or another cloud
+    /// folder whose reads can stall, so this waits at most a second and otherwise uses the last list it read.
     static func available() -> [Mod] {
+        if let found = Bounded.run(timeout: 1, fallback: nil, { Optional(scan()) }) { remember(found); return found }
+        lock.lock(); defer { lock.unlock() }
+        return lastFound ?? []
+    }
+
+    /// Reads the mods in the background (at launch), so the first session has them without waiting.
+    static func prewarm() {
+        DispatchQueue.global(qos: .utility).async { remember(scan()) }
+    }
+
+    private static func remember(_ mods: [Mod]) { lock.lock(); lastFound = mods; lock.unlock() }
+
+    private static func scan() -> [Mod] {
         guard let folder, let dirs = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return [] }
         return dirs.compactMap { dir -> Mod? in
@@ -60,7 +77,10 @@ enum Mods {
            let env = json["env"] as? [String: Any], let value = env["CLAUDE_CODE_PLUGIN_DIRS"] as? String {
             dirs += ":" + value
         }
-        let loaded = Set(dirs.split(separator: ":").map { pluginName(at: String($0)) })
+        let paths = dirs.split(separator: ":").map(String.init)
+        let loaded = Set(Bounded.run(timeout: 1, fallback: paths.map { ($0 as NSString).lastPathComponent }) {
+            paths.map(pluginName(at:))
+        })
         return enabled.filter { !loaded.contains($0.name) }.map(\.path)
     }
 

@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     var window: NSWindow!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Mods.prewarm()
         UNUserNotificationCenter.current().delegate = self
         buildMenu()
 

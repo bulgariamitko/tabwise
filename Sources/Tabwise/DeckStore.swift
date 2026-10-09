@@ -418,7 +418,7 @@ final class DeckStore: ObservableObject {
 
     /// Fresh Claude session in `cwd` (keeping flags like --permission-mode from the tab it came from).
     func newSession(inFolderOf cwd: String?, args: [String] = []) {
-        guard let cwd, FileManager.default.fileExists(atPath: cwd) else { NSSound.beep(); return }
+        guard let cwd, Bounded.exists(cwd) else { NSSound.beep(); return }
         sidebarMode = .open
         newClaude(in: cwd, args: args)
     }
@@ -426,7 +426,7 @@ final class DeckStore: ObservableObject {
     /// Like `claude --continue`: reopen the most recent conversation in `cwd` (or jump to it if it's already a tab);
     /// starts a new session if that folder has none yet.
     func continueLast(in cwd: String, args: [String] = []) {
-        guard FileManager.default.fileExists(atPath: cwd) else { NSSound.beep(); return }
+        guard Bounded.exists(cwd) else { NSSound.beep(); return }
         sidebarMode = .open
         guard let last = HistoryScanner.lastSession(in: cwd) else { newClaude(in: cwd, args: args); return }
         resume(ResumeCommand(sessionId: last.id, args: args), cwd: cwd, quitOriginal: true)
@@ -436,7 +436,7 @@ final class DeckStore: ObservableObject {
 
     /// Resume a past session as a tab (or jump to it if it's already open) and switch back to Open.
     func resumeHistory(_ item: HistoryItem) {
-        guard let cwd = item.cwd, FileManager.default.fileExists(atPath: cwd) else { NSSound.beep(); return }
+        guard let cwd = item.cwd, Bounded.exists(cwd) else { NSSound.beep(); return }
         sidebarMode = .open
         resume(ResumeCommand(sessionId: item.id), cwd: cwd, quitOriginal: true)
     }
