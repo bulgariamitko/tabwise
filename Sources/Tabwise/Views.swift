@@ -296,6 +296,10 @@ struct Sidebar: View {
             .keyboardShortcut("t", modifiers: [.command, .option])
         Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: tab.cwd) }
             .keyboardShortcut("r", modifiers: [.command, .option])
+        if tab.isClaude && !tab.archived {
+            Button(tab.sendWhenDone ? "Cancel Send When Done" : "Send Draft When Claude Finishes") { store.toggleSendWhenDone(tab) }
+                .keyboardShortcut(.return, modifiers: .command)
+        }
         if let id = tab.sessionId {
             Button("Copy Session ID") { AppActions.copySessionID(tab) }
                 .keyboardShortcut("c", modifiers: [.command, .option])
@@ -516,12 +520,16 @@ struct TabMeta: View {
     @ObservedObject var tab: SessionTab
     var body: some View {
         let showMemory = !tab.archived && tab.memory > 0
-        if tab.git != nil || showMemory || tab.draft != nil {
+        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone {
             HStack(spacing: 10) {
-                if let draft = tab.draft {
+                if tab.sendWhenDone {
+                    Label("Sends when done", systemImage: "paperplane")
+                        .foregroundStyle(.green.opacity(0.9))
+                        .help("Your draft is sent as soon as Claude finishes. ⌘↩ again to cancel.\n\(tab.draft ?? "")")
+                } else if let draft = tab.draft {
                     Label("Draft", systemImage: "pencil.line")
                         .foregroundStyle(.yellow.opacity(0.9))
-                        .help("Unsent text in the input box (kept across restarts):\n\(draft)")
+                        .help("Unsent text in the input box (kept across restarts):\n\(draft)\n\n⌘↩ sends it once Claude finishes.")
                 }
                 if let git = tab.git {
                     Label(git.label, systemImage: "arrow.triangle.branch")

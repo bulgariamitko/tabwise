@@ -107,6 +107,19 @@ struct SettingsView: View {
     @State private var modsChanged = false
     @State private var modsDevFolder = Mods.devFolder ?? ""
     @State private var newPrompt = ""
+    @FocusState private var newPromptFocused: Bool
+
+    private func addPrompt() {
+        // Commit text an input method is still composing (it isn't in `newPrompt` until then), and read it once
+        // the field has handed it over.
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        DispatchQueue.main.async {
+            let t = newPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { newPromptFocused = true; return } // nothing typed yet: put the cursor there
+            prompts.prompts.append(SavedPrompt(text: t))
+            newPrompt = ""
+        }
+    }
 
     private var modsSection: some View {
         Section("Mods") {
@@ -268,12 +281,9 @@ struct SettingsView: View {
                 .onMove { prompts.prompts.move(fromOffsets: $0, toOffset: $1) }
                 HStack {
                     TextField("New prompt", text: $newPrompt, axis: .vertical).lineLimit(1...4)
-                    Button("Add") {
-                        let t = newPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !t.isEmpty else { return }
-                        prompts.prompts.append(SavedPrompt(text: t))
-                        newPrompt = ""
-                    }
+                        .focused($newPromptFocused)
+                        .onSubmit(addPrompt)
+                    Button("Add", action: addPrompt)
                 }
                 Text("⌃⌘1…⌃⌘9 types a prompt into the current session (press Return to send). Right-click a tab → Send Prompt sends it right away.")
                     .font(.caption).foregroundStyle(.secondary)

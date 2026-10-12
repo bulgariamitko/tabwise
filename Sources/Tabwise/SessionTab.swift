@@ -81,6 +81,8 @@ final class SessionTab: ObservableObject, Identifiable {
     @Published var memory: UInt64 = 0
     /// What's typed but not sent in Claude's input box (read off the screen).
     @Published var draft: String?
+    /// You approved the draft: press Return for you as soon as Claude finishes its turn.
+    @Published var sendWhenDone = false
     /// A draft saved last time, waiting to be typed back once Claude is ready.
     var pendingDraft: String?
     /// Was running when the app last quit (see SavedTab.running).

@@ -234,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     @objc func restartTab(_ sender: Any?) { store.selected?.restart() }
     @objc func sleepTab(_ sender: Any?) { if let t = store.selected { AppActions.toggleSleep(t, store: store) } }
+    @objc func sendWhenDone(_ sender: Any?) { if let t = store.selected { store.toggleSendWhenDone(t) } }
     @objc func renameTab(_ sender: Any?) { store.renameRequest = store.selected }
     @objc func noteTab(_ sender: Any?) { store.noteRequest = store.selected }
     @objc func copySessionID(_ sender: Any?) { if let t = store.selected { AppActions.copySessionID(t) } }
@@ -386,6 +387,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(sendWhenDone(_:)) {
+            item.title = store.selected?.sendWhenDone == true ? "Cancel Send When Done" : "Send Draft When Claude Finishes"
+            return store.selected?.isClaude == true
+        }
         if item.action == #selector(toggleSplit(_:)) {
             item.title = store.splitID == nil ? "Split View with Next Tab" : "Close Split View"
         }
@@ -469,6 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add(file, "Restart Tab", #selector(restartTab(_:)), "r", [.command, .shift], target: self)
         add(file, "Put Tab to Sleep", #selector(sleepTab(_:)), "s", target: self)
         add(file, "Put Other Tabs to Sleep", #selector(sleepOthers(_:)), "s", [.command, .option], target: self)
+        add(file, "Send Draft When Claude Finishes", #selector(sendWhenDone(_:)), "\r", target: self)
         add(file, "Rename Tab…", #selector(renameTab(_:)), "e", target: self)
         add(file, "Add Note…", #selector(noteTab(_:)), "n", [.command, .shift], target: self)
         add(file, "Copy Session ID", #selector(copySessionID(_:)), "c", [.command, .option], target: self)

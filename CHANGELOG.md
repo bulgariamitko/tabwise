@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.11
+
+- Send When Done (⌘↩): finish writing your next message while Claude works, press ⌘↩, and Tabwise sends it
+  as soon as Claude finishes (never while it asks you something). The tab shows "Sends when done"; ⌘↩ again
+  cancels. Also in the tab's right-click menu and File menu
+- Settings → Saved prompts: Add works when your input method is still holding typed text, Return adds too, and
+  Add with an empty box puts the cursor there
+
 ## 0.1.10
 
 - No more freezes when Dropbox, iCloud Drive or another cloud folder stalls: reading mods, checking that a

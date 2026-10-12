@@ -586,7 +586,10 @@ final class DeckStore: ObservableObject {
         refreshTranscripts()
         for tab in tabs {
             let previous = tab.status
-            if tab.status == .exited || tab.status == .notStarted || tab.archived { continue }
+            if tab.status == .exited || tab.status == .notStarted || tab.archived {
+                if tab.sendWhenDone { tab.sendWhenDone = false }
+                continue
+            }
             let match = tab.shellPid > 0
                 ? entries.first { Registry.pid($0.pid, descendsFrom: tab.shellPid) }
                 : nil
@@ -602,6 +605,7 @@ final class DeckStore: ObservableObject {
 
 
             if tab.status != previous { statusChanged = true }
+            if tab.sendWhenDone { sendDraftIfDone(tab) }
             let finished = previous == .working && (tab.status == .idle || tab.status == .waiting)
             let nowWaiting = previous != .waiting && tab.status == .waiting
             if finished || nowWaiting, !(appActive && tab.id == selectedID) {
@@ -728,6 +732,31 @@ final class DeckStore: ObservableObject {
             let draft = text.isEmpty ? nil : text
             if draft != tab.draft { tab.draft = draft }
         }
+    }
+
+    /// Send When Done (⌘↩): you've finished writing the draft in the input box; Tabwise presses Return for you
+    /// once Claude finishes what it's doing, instead of the message cutting into the running turn. Right away if
+    /// Claude is already idle. Again to cancel.
+    func toggleSendWhenDone(_ tab: SessionTab) {
+        if tab.sendWhenDone { tab.sendWhenDone = false; return }
+        guard tab.isClaude, tab.claudePid != nil,
+              let text = DraftReader.read(tab.terminal.getTerminal()), !text.isEmpty else { NSSound.beep(); return }
+        tab.draft = text
+        tab.sendWhenDone = true
+        sendDraftIfDone(tab)
+    }
+
+    private func sendDraftIfDone(_ tab: SessionTab) {
+        // Only when the turn is over: not while it works, and never while Claude asks you something
+        // (Return there would answer the question).
+        guard tab.status == .idle, tab.pendingDraft == nil else { return }
+        // No input box on screen (a dialog, a menu): try again on the next poll.
+        guard let text = DraftReader.read(tab.terminal.getTerminal()) else { return }
+        tab.sendWhenDone = false
+        guard !text.isEmpty else { return } // you sent or cleared it yourself
+        tab.terminal.send(txt: "\r")
+        tab.draft = nil
+        tab.lastActive = Date()
     }
 
     var totalMemory: UInt64 { liveTabs.reduce(0) { $0 + $1.memory } }

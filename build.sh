@@ -82,6 +82,7 @@ PLIST
 # microphone across rebuilds (an ad-hoc signature changes every build and resets them).
 if [ "${SKIP_SIGN:-}" != "1" ]; then
   SIGN_ID="${SIGN_ID:-$(security find-identity -p codesigning -v | awk -F'"' '/Apple Development/{print $2; exit}')}"
+  xattr -cr "$APP"   # Dropbox tags files in this folder; codesign rejects extended attributes
   codesign --force --deep -s "${SIGN_ID:--}" "$APP"
   echo "Signed with: ${SIGN_ID:-ad-hoc}"
 fi
