@@ -39,15 +39,32 @@ enum DraftReader {
         return s.filter(isLine).count > max(10, s.count * 2 / 3)
     }
 
-    /// The unsent text in the input box, "" when it's empty, nil when no input box is on screen.
-    static func read(_ terminal: Terminal) -> String? {
-        let screen = rows(terminal)
-        // Input box: a rule line, then "❯ text…", continuation lines, then another rule line.
+    /// Input box: a rule line, then "❯ text…", continuation lines, then another rule line.
+    private static func inputBox(_ screen: [(text: [Character], faint: [Bool])]) -> (top: Int, bottom: Int)? {
         guard let bottom = screen.indices.reversed().first(where: { i in
             isRule(screen[i].text) && i > 1 && screen[..<i].contains(where: { isRule($0.text) })
         }) else { return nil }
         guard let top = screen.indices[..<bottom].reversed().first(where: { isRule(screen[$0].text) }), bottom - top >= 2
         else { return nil }
+        return (top, bottom)
+    }
+
+    /// Whether Claude's last turn stopped without finishing: its last "⏺" block above the input box is an
+    /// "API Error: …" (e.g. "Your computer went to sleep mid-response"), or the turn shows "Interrupted".
+    static func turnFailed(_ terminal: Terminal) -> Bool {
+        let screen = rows(terminal)
+        guard let box = inputBox(screen) else { return false }
+        let lines = screen[..<box.top].map { String($0.text).trimmingCharacters(in: .whitespaces) }
+        guard let last = lines.lastIndex(where: { $0.hasPrefix("⏺") }) else { return false }
+        let compact = { (s: String) in s.replacingOccurrences(of: " ", with: "") }
+        return compact(lines[last]).hasPrefix("⏺APIError")
+            || lines[last...].contains { compact($0).hasPrefix("⎿Interrupted") }
+    }
+
+    /// The unsent text in the input box, "" when it's empty, nil when no input box is on screen.
+    static func read(_ terminal: Terminal) -> String? {
+        let screen = rows(terminal)
+        guard let (top, bottom) = inputBox(screen) else { return nil }
         var lines: [String] = []
         var widths: [Int] = []
         for i in (top + 1)..<bottom {

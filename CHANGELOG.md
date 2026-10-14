@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.12
+
+- Send When Done no longer sends your draft when Claude was cut off instead of finishing: closing the lid
+  (the Mac going to sleep), an API error or an interruption keep the draft unsent
+
 ## 0.1.11
 
 - Send When Done (⌘↩): finish writing your next message while Claude works, press ⌘↩, and Tabwise sends it

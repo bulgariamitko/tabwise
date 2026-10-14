@@ -57,6 +57,7 @@ final class DeckStore: ObservableObject {
 
     private let transcripts = TranscriptReader()
     private var pollTimer: Timer?
+    private var sleepObserver: NSObjectProtocol?
     private var tick = 0
     private let keepAwake = KeepAwake()
     @Published private(set) var keepingAwake = false
@@ -247,6 +248,14 @@ final class DeckStore: ObservableObject {
         }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
+        }
+        // Closing the lid cuts Claude off mid-reply ("API Error: Your computer went to sleep mid-response") and it
+        // goes idle without finishing: that's not the moment to send a message you queued with Send When Done.
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                for tab in self?.tabs ?? [] where tab.sendWhenDone && tab.status != .idle { tab.sendWhenDone = false }
+            }
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
@@ -754,6 +763,8 @@ final class DeckStore: ObservableObject {
         guard let text = DraftReader.read(tab.terminal.getTerminal()) else { return }
         tab.sendWhenDone = false
         guard !text.isEmpty else { return } // you sent or cleared it yourself
+        // The turn stopped without finishing (an API error, the Mac slept, you pressed Esc): keep the draft unsent.
+        guard !DraftReader.turnFailed(tab.terminal.getTerminal()) else { NSSound.beep(); return }
         tab.terminal.send(txt: "\r")
         tab.draft = nil
         tab.lastActive = Date()
