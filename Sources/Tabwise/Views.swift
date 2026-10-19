@@ -290,8 +290,15 @@ struct Sidebar: View {
             }
         }
         Divider()
-        Button("Start New Session in This Folder") { store.newSession(inFolderOf: tab.cwd, args: tab.extraArgs) }
-            .keyboardShortcut("t", modifiers: [.command, .control])
+        Button("Start New Session in This Folder") {
+            store.newSession(inFolderOf: tab.cwd, args: tab.extraArgs, agent: tab.agent ?? .claude)
+        }
+        .keyboardShortcut("t", modifiers: [.command, .control])
+        Menu("Start New Session With") {
+            ForEach(Agent.allCases) { agent in
+                Button(agent.name) { store.newSession(inFolderOf: tab.cwd, agent: agent) }
+            }
+        }
         Button("Open Shell in This Folder") { store.newShell(in: tab.cwd) }
             .keyboardShortcut("t", modifiers: [.command, .option])
         Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: tab.cwd) }
@@ -310,7 +317,7 @@ struct Sidebar: View {
             }
         }
         if !tab.archived {
-            Button(tab.isClaude ? "Restart (resume conversation)" : "Restart") { tab.restart() }
+            Button(tab.isAgent ? "Restart (resume conversation)" : "Restart") { tab.restart() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             Divider()
             Button(tab.status == .notStarted ? "Wake Up" : "Put to Sleep (free memory)") {
@@ -362,6 +369,7 @@ struct TabRow: View {
                 }
                 if let note { NoteLabel(note: note) }
                 HStack(spacing: 4) {
+                    if let agent = tab.agent, agent != .claude { AgentBadge(agent: agent) }
                     FolderLabel(text: FolderColors.shortPath(tab.cwd), color: folderColor).help(tab.shortPath)
                     if tab.lastActive > .distantPast {
                         Spacer(minLength: 4)
@@ -514,6 +522,23 @@ struct FolderGroupHeader: View {
         .contentShape(Rectangle())
         .onTapGesture { expanded.wrappedValue.toggle() }
     }
+}
+
+/// Marks a Codex or Antigravity tab (Claude tabs are the default and carry no badge).
+struct AgentBadge: View {
+    let agent: Agent
+    var body: some View {
+        Text(agent.name)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 0.5)
+            .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.15)))
+            .fixedSize()
+            .help(agent == .codex ? "OpenAI Codex" : "Google Antigravity")
+    }
+
+    private var color: Color { agent == .codex ? .teal : .blue }
 }
 
 struct TabMeta: View {

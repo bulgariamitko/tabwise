@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.13
+
+- Codex (OpenAI) and Antigravity (Google) tabs next to Claude: pick the agent in New Session (⌘T), or right-click a
+  tab → Start New Session With. They show working / needs-you / done like Claude tabs (with notifications), and
+  resume their conversation after a restart, sleep or quit. A small Codex / Antigravity label marks them in the sidebar.
+  Claude-only features (drafts, Send When Done, status line, mods, All Sessions history) stay Claude-only for now
+- Search matches every word you type anywhere in a session (name, folder, messages, note, agent), and treats
+  "-", "_", "." and "/" as spaces: "claude code" finds sessions in …/claude-code, "codex" finds Codex tabs
+
 ## 0.1.12
 
 - Send When Done no longer sends your draft when Claude was cut off instead of finishing: closing the lid

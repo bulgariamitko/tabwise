@@ -248,7 +248,8 @@ final class TranscriptReader {
     private var searchedBack: Set<String> = []
 
     /// Returns nil when nothing changed since the last call.
-    func read(sessionId: String, cwd: String) -> TranscriptInfo? {
+    func read(sessionId: String, cwd: String, agent: Agent = .claude) -> TranscriptInfo? {
+        guard agent == .claude else { return readAgent(agent, sessionId: sessionId, cwd: cwd) }
         guard let url = locate(sessionId: sessionId, cwd: cwd),
               let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let mtime = attrs[.modificationDate] as? Date else { return nil }
@@ -272,6 +273,19 @@ final class TranscriptReader {
             if info.lastUserAt == nil { info.lastUserAt = more.lastUserAt }
         }
         if window >= size || (info.title != nil && info.lastUserAt != nil) { searchedBack.insert(sessionId) }
+        cache[sessionId] = info
+        return info
+    }
+
+    /// Codex / Antigravity sessions: their files are smaller and laid out differently (see AgentSessions).
+    private func readAgent(_ agent: Agent, sessionId: String, cwd: String) -> TranscriptInfo? {
+        guard let url = paths[sessionId] ?? AgentSessions.file(agent, sessionId: sessionId, cwd: cwd),
+              let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        else { return nil }
+        paths[sessionId] = url
+        if mtimes[sessionId] == mtime { return nil }
+        mtimes[sessionId] = mtime
+        let info = AgentSessions.read(agent, url: url, sessionId: sessionId)
         cache[sessionId] = info
         return info
     }

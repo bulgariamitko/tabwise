@@ -33,7 +33,10 @@ enum TabColor: String, Codable, CaseIterable, Identifiable {
 /// What gets written to disk so tabs come back on the next launch.
 struct SavedTab: Codable {
     var id: UUID
+    /// Claude tab (false: a plain shell, or another agent; see `agent`).
     var isClaude: Bool
+    /// Codex or Antigravity; nil for Claude and shell tabs, which `isClaude` tells apart (files from older versions).
+    var agent: Agent?
     var sessionId: String?
     var cwd: String
     var customName: String?
@@ -57,7 +60,10 @@ struct SavedTab: Codable {
 @MainActor
 final class SessionTab: ObservableObject, Identifiable {
     let id: UUID
-    let isClaude: Bool
+    /// The agent this tab runs, or nil for a plain shell.
+    let agent: Agent?
+    var isClaude: Bool { agent == .claude }
+    var isAgent: Bool { agent != nil }
     @Published var sessionId: String?
     @Published var cwd: String
     @Published var customName: String?
@@ -76,8 +82,10 @@ final class SessionTab: ObservableObject, Identifiable {
     @Published var needsAttention = false
     /// When it started waiting for you (for ⌘J, oldest first).
     var attentionSince: Date?
-    /// The claude process in this tab, once matched in the registry.
+    /// The agent's process in this tab, once found (Claude: matched in its registry).
     var claudePid: pid_t?
+    /// Codex / Antigravity: start with the folder's latest conversation (once; then the tab knows its session).
+    var continueLatest = false
     @Published var memory: UInt64 = 0
     /// What's typed but not sent in Claude's input box (read off the screen).
     @Published var draft: String?
@@ -97,14 +105,14 @@ final class SessionTab: ObservableObject, Identifiable {
     private(set) var startedAt = Date()
     private var delegateBox: TerminalDelegate?
 
-    init(id: UUID = UUID(), isClaude: Bool, sessionId: String?, cwd: String, customName: String? = nil, group: String? = nil) {
+    init(id: UUID = UUID(), agent: Agent?, sessionId: String?, cwd: String, customName: String? = nil, group: String? = nil) {
         self.id = id
-        self.isClaude = isClaude
+        self.agent = agent
         self.sessionId = sessionId
         self.cwd = cwd
         self.customName = customName
         self.group = group
-        self.status = isClaude ? .starting : .shell
+        self.status = agent != nil ? .starting : .shell
         terminal = DropTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         terminal.autoresizingMask = [.width, .height]
         Theme.apply(to: terminal)
@@ -113,12 +121,12 @@ final class SessionTab: ObservableObject, Identifiable {
         terminal.processDelegate = box
         terminal.claudeActive = { [weak self] in
             guard let self else { return false }
-            return [.idle, .working, .waiting].contains(self.status) || (self.isClaude && self.status == .starting)
+            return [.idle, .working, .waiting].contains(self.status) || (self.isAgent && self.status == .starting)
         }
     }
 
     convenience init(saved: SavedTab) {
-        self.init(id: saved.id, isClaude: saved.isClaude, sessionId: saved.sessionId,
+        self.init(id: saved.id, agent: saved.agent ?? (saved.isClaude ? .claude : nil), sessionId: saved.sessionId,
                   cwd: saved.cwd, customName: saved.customName, group: saved.group)
         color = saved.color
         pinned = saved.pinned ?? false
@@ -132,7 +140,7 @@ final class SessionTab: ObservableObject, Identifiable {
     }
 
     var saved: SavedTab {
-        SavedTab(id: id, isClaude: isClaude, sessionId: sessionId, cwd: cwd, customName: customName, group: group,
+        SavedTab(id: id, isClaude: isClaude, agent: isClaude ? nil : agent, sessionId: sessionId, cwd: cwd, customName: customName, group: group,
                  title: displayName, color: color, pinned: pinned ? true : nil, archived: archived ? true : nil,
                  lastActive: lastActive, extraArgs: extraArgs.isEmpty ? nil : extraArgs, draft: draft,
                  running: status.isActive || status == .shell ? true : nil)
@@ -141,8 +149,8 @@ final class SessionTab: ObservableObject, Identifiable {
     var displayName: String {
         if let customName, !customName.isEmpty { return customName }
         if let t = transcript.title, !t.isEmpty { return t }
-        let runningClaude = isClaude || registryName != nil
-        if runningClaude, let t = terminalTitle, !t.isEmpty, t != "Claude Code" { return t }
+        let runningAgent = isAgent || registryName != nil
+        if runningAgent, let t = terminalTitle, !t.isEmpty, t != "Claude Code" { return t }
         if let registryName { return registryName }
         return folderName
     }
@@ -171,9 +179,11 @@ final class SessionTab: ObservableObject, Identifiable {
             let claude = parts.joined(separator: " ")
             // Drop into a shell when claude exits so the tab stays usable.
             command = "\(claude); \(command)"
+        } else if let agent {
+            command = "\(agent.startCommand(sessionId: sessionId, cwd: cwd, continueLatest: continueLatest)); \(command)"
         }
         startedAt = Date()
-        status = isClaude ? .starting : .shell
+        status = isAgent ? .starting : .shell
         terminal.startProcess(executable: shell, args: ["-l", "-i", "-c", command],
                               environment: Self.environment(), execName: "-" + (shell as NSString).lastPathComponent,
                               currentDirectory: cwd)
@@ -208,7 +218,7 @@ final class SessionTab: ObservableObject, Identifiable {
     func stashDraft() {
         guard pendingDraft == nil else { return } // an earlier draft hasn't been typed back yet; keep that one
         // Read the box right now: the periodic scan may be a couple of seconds behind your typing.
-        if claudePid != nil, status == .idle || status == .working, let text = DraftReader.read(terminal.getTerminal()) {
+        if isClaude, claudePid != nil, status == .idle || status == .working, let text = DraftReader.read(terminal.getTerminal()) {
             draft = text.isEmpty ? nil : text
         }
         pendingDraft = draft
@@ -243,9 +253,16 @@ final class SessionTab: ObservableObject, Identifiable {
         return env.map { "\($0.key)=\($0.value)" }
     }
 
+    /// The window title as the agent set it (Codex shows its working spinner there).
+    var rawTitle: String?
+
     fileprivate func titleChanged(_ raw: String) {
+        rawTitle = raw
         // Claude prefixes the title with a spinner / ✳ glyph; keep only the words.
-        let trimmed = raw.drop { !($0.isLetter || $0.isNumber) }
+        var trimmed = raw.drop { !($0.isLetter || $0.isNumber) }
+        // Codex: "<conversation> | <folder>" (just the folder before it has a name).
+        if agent == .codex, let bar = trimmed.range(of: " | ", options: .backwards) { trimmed = trimmed[..<bar.lowerBound] }
+        if trimmed == folderName { trimmed = "" }
         terminalTitle = trimmed.isEmpty ? nil : String(trimmed)
     }
 

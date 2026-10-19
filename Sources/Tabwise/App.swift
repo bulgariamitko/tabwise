@@ -25,26 +25,43 @@ enum AppActions {
         return url.path
     }
 
-    /// New session: pick a folder, optionally continuing its last conversation (a checkbox in the panel).
+    /// The agent the New Session panel offers first: the one you picked last time.
+    static var lastAgent: Agent {
+        get { UserDefaults.standard.string(forKey: "newSessionAgent").flatMap(Agent.init) ?? .claude }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "newSessionAgent") }
+    }
+
+    /// New session: pick a folder and the agent to run (Claude, Codex or Antigravity), optionally continuing the folder's
+    /// last conversation (a checkbox in the panel).
     static func newSession(_ store: DeckStore, continueLast: Bool = false) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.message = "Choose a folder to start Claude in"
+        panel.message = "Choose a folder to start a session in"
         panel.prompt = "Open"
         panel.directoryURL = URL(fileURLWithPath: lastFolder)
-        let checkbox = NSButton(checkboxWithTitle: "Continue the last conversation in this folder (claude --continue)",
-                                target: nil, action: nil)
+        let label = NSTextField(labelWithString: "Agent:")
+        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
+        for agent in Agent.allCases { picker.addItem(withTitle: agent.name) }
+        picker.selectItem(at: Agent.allCases.firstIndex(of: lastAgent) ?? 0)
+        picker.sizeToFit()
+        let checkbox = NSButton(checkboxWithTitle: "Continue the last conversation in this folder", target: nil, action: nil)
         checkbox.state = continueLast ? .on : .off
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: checkbox.fittingSize.width + 40, height: checkbox.fittingSize.height + 16))
-        checkbox.frame.origin = NSPoint(x: 20, y: 8)
-        accessory.addSubview(checkbox)
+        let row = NSStackView(views: [label, picker, checkbox])
+        row.spacing = 10
+        row.setCustomSpacing(24, after: picker)
+        let size = row.fittingSize
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: size.width + 40, height: size.height + 16))
+        row.frame = NSRect(x: 20, y: 8, width: size.width, height: size.height)
+        accessory.addSubview(row)
         panel.accessoryView = accessory
         panel.isAccessoryViewDisclosed = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         lastFolder = url.path
-        if checkbox.state == .on { store.continueLast(in: url.path) } else { store.newClaude(in: url.path) }
+        let agent = Agent.allCases[max(0, picker.indexOfSelectedItem)]
+        lastAgent = agent
+        store.newAgent(agent, in: url.path, continueLatest: checkbox.state == .on)
     }
 
     static func newShell(_ store: DeckStore) {
@@ -57,7 +74,7 @@ enum AppActions {
         if tab.status == .working {
             let alert = NSAlert()
             alert.messageText = "Put “\(tab.displayName)” to sleep?"
-            alert.informativeText = "Claude is still working in this tab; its current reply will be interrupted. Everything up to now is kept, and waking the tab resumes the conversation."
+            alert.informativeText = "\(tab.agent?.name ?? "Claude") is still working in this tab; its current reply will be interrupted. Everything up to now is kept, and waking the tab resumes the conversation."
             alert.addButton(withTitle: "Put to Sleep")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -75,7 +92,7 @@ enum AppActions {
         if tab.status == .working {
             let alert = NSAlert()
             alert.messageText = "Close “\(tab.displayName)”?"
-            alert.informativeText = "Claude is still working in this tab. You can resume the conversation later with claude --resume."
+            alert.informativeText = "\(tab.agent?.name ?? "Claude") is still working in this tab. You can resume the conversation later from All Sessions or Reopen Closed Tab."
             alert.addButton(withTitle: "Close")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -192,7 +209,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
            let item = store.history.items.first(where: { $0.id == id }) {
             store.newSession(inFolderOf: item.cwd)
         } else {
-            store.newSession(inFolderOf: store.selected?.cwd ?? AppActions.lastFolder, args: store.selected?.extraArgs ?? [])
+            store.newSession(inFolderOf: store.selected?.cwd ?? AppActions.lastFolder, args: store.selected?.extraArgs ?? [],
+                             agent: store.selected?.agent ?? .claude)
         }
     }
     @objc func newShell(_ sender: Any?) { AppActions.newShell(store) }
@@ -463,8 +481,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add(app, "Quit Tabwise", #selector(NSApplication.terminate(_:)), "q")
 
         let file = submenu("File")
-        add(file, "New Claude Session…", #selector(newSession(_:)), "t", target: self)
-        add(file, "New Claude Session in Same Folder", #selector(newSessionHere(_:)), "t", [.command, .control], target: self)
+        add(file, "New Session…", #selector(newSession(_:)), "t", target: self)
+        add(file, "New Session in Same Folder", #selector(newSessionHere(_:)), "t", [.command, .control], target: self)
         add(file, "New Shell Tab", #selector(newShell(_:)), "t", [.command, .option], target: self)
         file.addItem(.separator())
         add(file, "Continue Last Session in Folder…", #selector(continueSession(_:)), "o", target: self)

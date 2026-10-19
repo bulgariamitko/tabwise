@@ -130,25 +130,36 @@ final class DeckStore: ObservableObject {
         return deepResults[sessionId]
     }
 
+    /// Every word of the query must appear somewhere: in the name, the folder path, your messages, the note, the
+    /// agent. "-", "_", "." and "/" count as spaces, so "claude code" finds …/claude-code and "tabwise" any session
+    /// in a folder of that name.
     func matches(_ item: HistoryItem) -> Bool {
-        let q = searchQuery
-        guard !q.isEmpty else { return true }
-        return item.id.hasPrefix(q) || searchHit(item.id) != nil
-            || historyName(item).lowercased().contains(q)
-            || (item.cwd ?? "").lowercased().contains(q)
-            || (item.firstPrompt ?? "").lowercased().contains(q)
-            || (item.lastPrompt ?? "").lowercased().contains(q)
-            || (history.note(item.id) ?? "").lowercased().contains(q)
+        guard isSearching else { return true }
+        if item.id.hasPrefix(searchQuery) || searchHit(item.id) != nil { return true }
+        return containsSearchWords(fields(of: item))
     }
 
     func matches(_ tab: SessionTab, items: [String: HistoryItem]) -> Bool {
-        let q = searchQuery
-        guard !q.isEmpty else { return true }
-        if tab.displayName.lowercased().contains(q) || tab.cwd.lowercased().contains(q)
-            || (tab.group ?? "").lowercased().contains(q) { return true }
-        guard let id = tab.sessionId else { return false }
-        if let item = items[id] { return matches(item) }
-        return id.hasPrefix(q) || searchHit(id) != nil || (history.note(id) ?? "").lowercased().contains(q)
+        guard isSearching else { return true }
+        var fields = [tab.displayName, tab.cwd, tab.group ?? "", tab.agent?.name ?? ""]
+        if let id = tab.sessionId {
+            if id.hasPrefix(searchQuery) || searchHit(id) != nil { return true }
+            fields += items[id].map(self.fields) ?? [history.note(id) ?? ""]
+        }
+        return containsSearchWords(fields)
+    }
+
+    private func fields(of item: HistoryItem) -> [String] {
+        [historyName(item), item.cwd ?? "", item.firstPrompt ?? "", item.lastPrompt ?? "", history.note(item.id) ?? ""]
+    }
+
+    private static func searchable(_ s: String) -> String {
+        String(s.lowercased().map { "-_./".contains($0) ? " " : $0 })
+    }
+
+    private func containsSearchWords(_ fields: [String]) -> Bool {
+        let hay = Self.searchable(fields.joined(separator: " "))
+        return Self.searchable(searchQuery).split(separator: " ").allSatisfy { hay.contains($0) }
     }
 
     /// Full-text search over every conversation, debounced; cancelled when the query changes.
@@ -263,9 +274,21 @@ final class DeckStore: ObservableObject {
     // MARK: Tabs
 
     func newClaude(in cwd: String, resume sessionId: String? = nil, args: [String] = []) {
-        let tab = SessionTab(isClaude: true, sessionId: sessionId, cwd: cwd, customName: nil, group: nil)
+        let tab = SessionTab(agent: .claude, sessionId: sessionId, cwd: cwd, customName: nil, group: nil)
         tab.extraArgs = args
         if let id = sessionId { tab.customName = history.name(id) }
+        add(tab, select: true)
+    }
+
+    /// New tab running `agent` in `cwd`; Codex and Antigravity can pick up the folder's latest conversation instead.
+    func newAgent(_ agent: Agent, in cwd: String, continueLatest: Bool = false, args: [String] = []) {
+        guard agent != .claude else {
+            if continueLatest { continueLast(in: cwd, args: args) } else { newClaude(in: cwd, args: args) }
+            return
+        }
+        sidebarMode = .open
+        let tab = SessionTab(agent: agent, sessionId: nil, cwd: cwd)
+        tab.continueLatest = continueLatest
         add(tab, select: true)
     }
 
@@ -294,7 +317,7 @@ final class DeckStore: ObservableObject {
     }
 
     func newShell(in cwd: String) {
-        add(SessionTab(isClaude: false, sessionId: nil, cwd: cwd), select: true)
+        add(SessionTab(agent: nil, sessionId: nil, cwd: cwd), select: true)
     }
 
     private func add(_ tab: SessionTab, select: Bool, start: Bool = true) {
@@ -406,7 +429,7 @@ final class DeckStore: ObservableObject {
         }
         let tab = SessionTab(saved: record)
         tab.archived = false
-        tab.status = tab.isClaude ? .starting : .shell
+        tab.status = tab.isAgent ? .starting : .shell
         add(tab, select: true)
     }
 
@@ -425,11 +448,11 @@ final class DeckStore: ObservableObject {
             ?? String(item.id.prefix(8))
     }
 
-    /// Fresh Claude session in `cwd` (keeping flags like --permission-mode from the tab it came from).
-    func newSession(inFolderOf cwd: String?, args: [String] = []) {
+    /// Fresh session in `cwd` (Claude keeps flags like --permission-mode from the tab it came from).
+    func newSession(inFolderOf cwd: String?, args: [String] = [], agent: Agent = .claude) {
         guard let cwd, Bounded.exists(cwd) else { NSSound.beep(); return }
         sidebarMode = .open
-        newClaude(in: cwd, args: args)
+        if agent == .claude { newClaude(in: cwd, args: args) } else { newAgent(agent, in: cwd) }
     }
 
     /// Like `claude --continue`: reopen the most recent conversation in `cwd` (or jump to it if it's already a tab);
@@ -593,23 +616,29 @@ final class DeckStore: ObservableObject {
         let appActive = NSApp.isActive
         var statusChanged = false
         refreshTranscripts()
+        var processes: [AgentProcess.Proc]?
         for tab in tabs {
             let previous = tab.status
             if tab.status == .exited || tab.status == .notStarted || tab.archived {
                 if tab.sendWhenDone { tab.sendWhenDone = false }
                 continue
             }
-            let match = tab.shellPid > 0
-                ? entries.first { Registry.pid($0.pid, descendsFrom: tab.shellPid) }
-                : nil
-            tab.claudePid = match?.pid
-            if let match {
-                if tab.sessionId != match.sessionId { tab.sessionId = match.sessionId; scheduleSave() }
-                tab.registryName = match.name
-                if match.cwd != tab.cwd { tab.cwd = match.cwd }
-                tab.status = Self.status(from: match.status)
-            } else if tab.status != .starting || Date().timeIntervalSince(tab.startedAt) > 20 {
-                tab.status = .shell
+            if let agent = tab.agent, agent != .claude {
+                if processes == nil { processes = AgentProcess.all() }
+                pollAgent(tab, agent, processes: processes ?? [])
+            } else {
+                let match = tab.shellPid > 0
+                    ? entries.first { Registry.pid($0.pid, descendsFrom: tab.shellPid) }
+                    : nil
+                tab.claudePid = match?.pid
+                if let match {
+                    if tab.sessionId != match.sessionId { tab.sessionId = match.sessionId; scheduleSave() }
+                    tab.registryName = match.name
+                    if match.cwd != tab.cwd { tab.cwd = match.cwd }
+                    tab.status = Self.status(from: match.status)
+                } else if tab.status != .starting || Date().timeIntervalSince(tab.startedAt) > 20 {
+                    tab.status = .shell
+                }
             }
 
 
@@ -646,16 +675,58 @@ final class DeckStore: ObservableObject {
         save()
     }
 
+    /// Codex / Antigravity: running while their process is in the tab; working or needs-you from the screen; the
+    /// conversation the tab is in from their session files (a new one appears once you send the first message).
+    private func pollAgent(_ tab: SessionTab, _ agent: Agent, processes: [AgentProcess.Proc]) {
+        let pid = tab.shellPid > 0 ? AgentProcess.find(agent, under: tab.shellPid, in: processes) : nil
+        tab.claudePid = pid
+        guard pid != nil else {
+            if tab.status != .starting || Date().timeIntervalSince(tab.startedAt) > 20 { tab.status = .shell }
+            return
+        }
+        tab.status = AgentScreen.status(agent, terminal: tab.terminal.getTerminal(), title: tab.rawTitle)
+        if let prompts = ProcessInfo.processInfo.environment["TABWISE_TEST_AGENT_PROMPT"]?.components(separatedBy: "|"), // test hook
+           tab.status == .idle, tab.draftRestoreTries < prompts.count, Date().timeIntervalSince(tab.lastDraftRestore) > 8,
+           // only into the message box, never into a startup question (update, trust, …)
+           AgentScreen.lines(tab.terminal.getTerminal()).suffix(6).joined().lowercased()
+               .contains(agent == .codex ? "ask codex" : "? for shortcuts") {
+            tab.lastDraftRestore = Date()
+            tab.terminal.insert(prompts[tab.draftRestoreTries], submit: true)
+            tab.draftRestoreTries += 1
+        }
+        if Self.debugDrafts {
+            let line = "\(Date()) \(agent.name) pid=\(pid ?? 0) \(tab.status.label) session=\(tab.sessionId ?? "-") title=\(tab.rawTitle ?? "-")\n"
+            let url = Self.stateURL.deletingLastPathComponent().appendingPathComponent("agent-debug.txt")
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+            else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+            let screen = AgentScreen.lines(tab.terminal.getTerminal()).joined(separator: "\n")
+            try? screen.write(to: url.deletingLastPathComponent().appendingPathComponent("agent-screen-\(agent.rawValue).txt"),
+                              atomically: true, encoding: .utf8)
+        }
+        if tab.sessionId == nil, tick % 3 == 0 {
+            let taken = Set(tabs.compactMap(\.sessionId))
+            let since = tab.startedAt.addingTimeInterval(-2)
+            let cwd = tab.cwd
+            if let id = Bounded.run(timeout: 0.3, fallback: nil, {
+                AgentSessions.discover(agent, cwd: cwd, since: since, excluding: taken)
+            }) {
+                tab.sessionId = id
+                tab.continueLatest = false
+                scheduleSave()
+            }
+        }
+    }
+
     /// Titles, previews and last-message times from each tab's transcript, read off the main thread.
     private func refreshTranscripts() {
         guard !transcriptsBusy else { return }
-        let jobs = tabs.compactMap { tab in tab.sessionId.map { (tab: tab.id, session: $0, cwd: tab.cwd) } }
+        let jobs = tabs.compactMap { tab in tab.sessionId.map { (tab: tab.id, session: $0, cwd: tab.cwd, agent: tab.agent ?? .claude) } }
         guard !jobs.isEmpty else { return }
         transcriptsBusy = true
         let reader = transcripts
         transcriptQueue.async {
             let results = jobs.compactMap { job in
-                reader.read(sessionId: job.session, cwd: job.cwd).map { (tab: job.tab, session: job.session, info: $0) }
+                reader.read(sessionId: job.session, cwd: job.cwd, agent: job.agent).map { (tab: job.tab, session: job.session, info: $0) }
             }
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
@@ -710,7 +781,7 @@ final class DeckStore: ObservableObject {
 
     /// Save what's typed in each Claude input box; after a restart, type the saved draft back in.
     private func scanDrafts() {
-        for tab in liveTabs where tab.claudePid != nil && (tab.status == .idle || tab.status == .working) {
+        for tab in liveTabs where tab.isClaude && tab.claudePid != nil && (tab.status == .idle || tab.status == .working) {
             let t = tab.terminal.getTerminal()
             guard let text = DraftReader.read(t) else { continue }
             if Self.debugDrafts {
@@ -777,7 +848,7 @@ final class DeckStore: ObservableObject {
         let days = DeckSettings.autoArchiveDays
         guard days > 0 else { return }
         let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
-        for tab in liveTabs where tab.isClaude && !tab.pinned && tab.id != selectedID
+        for tab in liveTabs where tab.isAgent && !tab.pinned && tab.id != selectedID
             && tab.status == .idle && tab.lastActive > .distantPast && tab.lastActive < cutoff {
             archive(tab)
         }
