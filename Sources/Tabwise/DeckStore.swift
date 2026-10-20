@@ -102,6 +102,15 @@ final class DeckStore: ObservableObject {
         didSet { UserDefaults.standard.set(layout.rawValue, forKey: "sidebarLayout") }
     }
 
+    /// Sidebar keeps tabs where you dragged them instead of putting the one you last messaged on top.
+    @Published var manualOrder = UserDefaults.standard.bool(forKey: "sidebarManualOrder") {
+        didSet {
+            UserDefaults.standard.set(manualOrder, forKey: "sidebarManualOrder")
+            // Start from what you were looking at, so nothing jumps.
+            if manualOrder && !oldValue { freezeOrder() }
+        }
+    }
+
     /// Sidebar shows only active sessions (green dot); hides asleep, exited and plain shell tabs.
     @Published var activeOnly = UserDefaults.standard.bool(forKey: "sidebarActiveOnly") {
         didSet { UserDefaults.standard.set(activeOnly, forKey: "sidebarActiveOnly") }
@@ -183,16 +192,24 @@ final class DeckStore: ObservableObject {
     /// Pinned tabs, in the order you dragged them.
     var pinnedTabs: [SessionTab] { tabs.filter { $0.pinned && !$0.archived && shown($0) } }
 
-    /// Everything else that isn't archived, the session you last messaged first.
-    var recentTabs: [SessionTab] {
-        tabs.filter { !$0.pinned && !$0.archived && shown($0) }.sorted { $0.lastActive > $1.lastActive }
+    /// Everything else that isn't archived or asleep: the session you last messaged first, or your dragged order.
+    var recentTabs: [SessionTab] { unpinned { $0.status != .notStarted } }
+
+    /// Unpinned tabs that are asleep, kept apart in a compact section at the bottom.
+    var asleepTabs: [SessionTab] { unpinned { $0.status == .notStarted } }
+
+    private func unpinned(_ include: (SessionTab) -> Bool) -> [SessionTab] {
+        let rest = tabs.filter { !$0.pinned && !$0.archived && shown($0) && include($0) }
+        return manualOrder ? rest : rest.sorted { $0.lastActive > $1.lastActive }
     }
 
-    /// Recent tabs grouped by project; the group you worked in most recently comes first.
-    var projectGroups: [(key: String, tabs: [SessionTab])] {
+    /// Recent tabs grouped by project; the group you worked in most recently (or placed highest) comes first.
+    var projectGroups: [(key: String, tabs: [SessionTab])] { Self.grouped(recentTabs) }
+
+    private static func grouped(_ list: [SessionTab]) -> [(key: String, tabs: [SessionTab])] {
         var order: [String] = []
         var byKey: [String: [SessionTab]] = [:]
-        for tab in recentTabs {
+        for tab in list {
             if byKey[tab.groupKey] == nil { order.append(tab.groupKey) }
             byKey[tab.groupKey, default: []].append(tab)
         }
@@ -206,7 +223,7 @@ final class DeckStore: ObservableObject {
 
     /// Sidebar order of everything that isn't archived (what ⌘1…⌘9 and next/previous follow).
     var ordered: [SessionTab] {
-        pinnedTabs + (layout == .projects ? projectGroups.flatMap(\.tabs) : recentTabs)
+        pinnedTabs + (layout == .projects ? projectGroups.flatMap(\.tabs) : recentTabs) + asleepTabs
     }
 
     var knownGroups: [String] {
@@ -488,11 +505,27 @@ final class DeckStore: ObservableObject {
         scheduleSave()
     }
 
-    /// Drag-reorder inside the Pinned section (the other sections sort themselves by recency).
-    func movePinned(from offsets: IndexSet, to destination: Int) {
-        var pinned = tabs.filter { $0.pinned && !$0.archived }
-        pinned.move(fromOffsets: offsets, toOffset: destination)
-        tabs = pinned + tabs.filter { !($0.pinned && !$0.archived) }
+    /// Drag-reorder inside one sidebar section (Pinned, the list, or a folder group). The section's tabs swap
+    /// places among the spots they already hold, so other sections and folder groups stay put. Dragging an
+    /// unpinned tab turns on manual order.
+    func move(_ section: [SessionTab], from offsets: IndexSet, to destination: Int) {
+        if section.contains(where: { !$0.pinned }) { manualOrder = true }
+        var moved = section
+        moved.move(fromOffsets: offsets, toOffset: destination)
+        let slots = section.compactMap { tab in tabs.firstIndex { $0.id == tab.id } }.sorted()
+        guard slots.count == moved.count else { return }
+        var list = tabs
+        for (slot, tab) in zip(slots, moved) { list[slot] = tab }
+        tabs = list
+        scheduleSave()
+    }
+
+    /// Store the order the sidebar shows right now, so switching to manual order moves nothing.
+    private func freezeOrder() {
+        let live = tabs.filter { !$0.archived }
+        let rest = live.filter { !$0.pinned }.sorted { $0.lastActive > $1.lastActive }
+        tabs = live.filter(\.pinned) + (layout == .projects ? Self.grouped(rest).flatMap(\.tabs) : rest)
+            + tabs.filter(\.archived)
         scheduleSave()
     }
 

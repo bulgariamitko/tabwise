@@ -247,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc func setLayout(_ sender: NSMenuItem) {
         store.layout = sender.tag == 1 ? .projects : .recent
     }
+    @objc func setOrder(_ sender: NSMenuItem) { store.manualOrder = sender.tag == 1 }
     @objc func closeTab(_ sender: Any?) {
         if let tab = store.selected { AppActions.close(tab, store: store) } else { window.performClose(nil) }
     }
@@ -419,6 +420,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if item.action == #selector(setLayout(_:)) {
             item.state = (item.tag == 1) == (store.layout == .projects) ? .on : .off
         }
+        if item.action == #selector(setOrder(_:)) {
+            item.state = (item.tag == 1) == store.manualOrder ? .on : .off
+        }
         if item.action == #selector(togglePin(_:)) {
             item.title = store.selected?.pinned == true ? "Unpin Tab" : "Pin Tab to Top"
             return store.selected.map { !$0.archived } ?? false
@@ -525,8 +529,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add(view, "Split View with Next Tab", #selector(toggleSplit(_:)), "d", target: self)
         add(view, "Side by Side / Stacked", #selector(toggleSplitOrientation(_:)), "d", [.command, .shift], target: self)
         view.addItem(.separator())
-        add(view, "Most Recent First", #selector(setLayout(_:)), target: self, tag: 0)
+        add(view, "One List", #selector(setLayout(_:)), target: self, tag: 0)
         add(view, "Group by Folder", #selector(setLayout(_:)), target: self, tag: 1)
+        add(view, "Last Message First", #selector(setOrder(_:)), target: self, tag: 0)
+        add(view, "Manual Order (Drag to Reorder)", #selector(setOrder(_:)), target: self, tag: 1)
         view.addItem(.separator())
         add(view, "Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control])
         view.addItem(.separator())

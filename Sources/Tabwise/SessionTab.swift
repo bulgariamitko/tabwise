@@ -163,6 +163,7 @@ final class SessionTab: ObservableObject, Identifiable {
     func start() {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         var command = "exec \(shell) -l"
+        var extraEnv: [String: String] = [:]
         if isClaude {
             let flags = extraArgs.isEmpty ? DeckSettings.defaultArgs : extraArgs
             var parts = ["claude"] + flags.map(ResumeCommand.shellQuote)
@@ -180,12 +181,22 @@ final class SessionTab: ObservableObject, Identifiable {
             // Drop into a shell when claude exits so the tab stays usable.
             command = "\(claude); \(command)"
         } else if let agent {
-            command = "\(agent.startCommand(sessionId: sessionId, cwd: cwd, continueLatest: continueLatest)); \(command)"
+            var start = agent.startCommand(sessionId: sessionId, cwd: cwd, continueLatest: continueLatest)
+            // Claude's MCP servers for this folder (~/.claude.json is local; .mcp.json is read bounded).
+            let servers = MCPShare.enabled ? MCPShare.claudeServers(cwd: cwd) : []
+            if agent == .codex, !servers.isEmpty {
+                let flags = MCPShare.codexFlags(servers)
+                start += " " + flags.args.map(ResumeCommand.shellQuote).joined(separator: " ")
+                extraEnv = flags.env
+            } else if agent == .antigravity {
+                MCPShare.syncAntigravity(servers)
+            }
+            command = "\(start); \(command)"
         }
         startedAt = Date()
         status = isAgent ? .starting : .shell
         terminal.startProcess(executable: shell, args: ["-l", "-i", "-c", command],
-                              environment: Self.environment(), execName: "-" + (shell as NSString).lastPathComponent,
+                              environment: Self.environment(extraEnv), execName: "-" + (shell as NSString).lastPathComponent,
                               currentDirectory: cwd)
         shellPid = terminal.process.shellPid
     }
@@ -240,8 +251,8 @@ final class SessionTab: ObservableObject, Identifiable {
         }
     }
 
-    private static func environment() -> [String] {
-        var env = ProcessInfo.processInfo.environment
+    private static func environment(_ extra: [String: String] = [:]) -> [String] {
+        var env = ProcessInfo.processInfo.environment.merging(extra) { _, new in new }
         // Don't leak a parent Claude Code session's identity into child sessions.
         for key in env.keys where key.hasPrefix("CLAUDECODE") || key.hasPrefix("CLAUDE_CODE_") {
             env.removeValue(forKey: key)

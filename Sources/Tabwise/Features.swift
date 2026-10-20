@@ -100,6 +100,7 @@ struct SettingsView: View {
     @State private var command = DeckSettings.defaultCommand
     @State private var archiveDays = DeckSettings.autoArchiveDays
     @State private var statusLine = DeckSettings.builtInStatusLine
+    @State private var shareMCP = MCPShare.enabled
     @State private var keepAwake = DeckSettings.keepAwake
     @State private var restartRunning = DeckSettings.restartRunning
     @State private var mods = Mods.available()
@@ -199,6 +200,10 @@ struct SettingsView: View {
                 Toggle("Built-in status line", isOn: $statusLine)
                     .onChange(of: statusLine) { _, v in DeckSettings.builtInStatusLine = v }
                 Text("Shows model, effort, rate limits, tokens, git and session time under Claude's input box. Applies to sessions started or restarted after changing it. Turn off to use your own Claude Code status line setting.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Share Claude's MCP servers with Codex and Antigravity", isOn: $shareMCP)
+                    .onChange(of: shareMCP) { _, v in MCPShare.enabled = v }
+                Text("Codex and Antigravity tabs get the MCP servers Claude Code has for their folder (claude mcp add, and a project's .mcp.json once you've approved it in Claude). claude.ai connectors like Gmail or Drive sign in through your Claude account and stay Claude-only. Applies when a tab starts or restarts.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             modsSection

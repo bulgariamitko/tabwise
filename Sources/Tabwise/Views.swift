@@ -58,6 +58,7 @@ struct Sidebar: View {
     @State private var dropTargeted = false
     @AppStorage("archiveExpanded") private var archiveExpanded = false
     @AppStorage("pinnedExpanded") private var pinnedExpanded = true
+    @AppStorage("asleepExpanded") private var asleepExpanded = true
     @State private var notingSession: String?
     @State private var noteText = ""
 
@@ -88,8 +89,13 @@ struct Sidebar: View {
                             Toggle("Only Active Sessions", isOn: $store.activeOnly)
                             Divider()
                             Picker("Sidebar", selection: $store.layout) {
-                                Text("Most Recent First").tag(DeckStore.Layout.recent)
+                                Text("One List").tag(DeckStore.Layout.recent)
                                 Text("Group by Folder").tag(DeckStore.Layout.projects)
+                            }
+                            .pickerStyle(.inline)
+                            Picker("Order", selection: $store.manualOrder) {
+                                Text("Last Message First").tag(false)
+                                Text("Manual (Drag to Reorder)").tag(true)
                             }
                             .pickerStyle(.inline)
                         } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
@@ -114,6 +120,7 @@ struct Sidebar: View {
         let pinned = store.pinnedTabs.filter(match)
         let recent = store.recentTabs.filter(match)
         let groups = store.projectGroups.map { (key: $0.key, tabs: $0.tabs.filter(match)) }.filter { !$0.tabs.isEmpty }
+        let asleep = store.asleepTabs.filter(match)
         let archived = store.archivedTabs.filter(match)
         let notOpen = searching ? store.history.items
             .filter { store.openTab(for: $0.id) == nil && (!$0.isTrivial || store.history.isPinned($0.id)) && store.matches($0) }
@@ -122,7 +129,7 @@ struct Sidebar: View {
             if !pinned.isEmpty {
                 Section(isExpanded: searching ? .constant(true) : $pinnedExpanded) {
                     ForEach(pinned) { tab in row(tab, ordered) }
-                        .onMove(perform: store.activeOnly || searching ? nil : { store.movePinned(from: $0, to: $1) })
+                        .onMove(perform: store.activeOnly || searching ? nil : { store.move(pinned, from: $0, to: $1) })
                 } header: {
                     SectionHeader(title: "Pinned (\(pinned.count))", icon: "pin.fill", expanded: $pinnedExpanded)
                 }
@@ -131,13 +138,23 @@ struct Sidebar: View {
                 ForEach(groups, id: \.key) { group in
                     Section(isExpanded: searching ? .constant(true) : store.groupExpanded(group.key)) {
                         ForEach(group.tabs) { tab in row(tab, ordered) }
+                            .onMove(perform: store.activeOnly || searching ? nil : { store.move(group.tabs, from: $0, to: $1) })
                     } header: {
                         FolderGroupHeader(store: store, key: group.key, tabs: group.tabs)
                     }
                 }
             } else if !recent.isEmpty {
-                Section("Recent") {
+                Section(store.manualOrder ? "Sessions" : "Recent") {
                     ForEach(recent) { tab in row(tab, ordered) }
+                        .onMove(perform: store.activeOnly || searching ? nil : { store.move(recent, from: $0, to: $1) })
+                }
+            }
+            if !asleep.isEmpty {
+                Section(isExpanded: searching ? .constant(true) : $asleepExpanded) {
+                    ForEach(asleep) { tab in row(tab, ordered, compact: true) }
+                        .onMove(perform: store.activeOnly || searching ? nil : { store.move(asleep, from: $0, to: $1) })
+                } header: {
+                    SectionHeader(title: "Asleep (\(asleep.count))", icon: "moon.zzz", expanded: $asleepExpanded)
                 }
             }
             if store.activeOnly {
@@ -158,7 +175,7 @@ struct Sidebar: View {
                     Label("Not Open (\(notOpen.count))", systemImage: "clock.arrow.circlepath")
                 }
             }
-            if searching && pinned.isEmpty && recent.isEmpty && groups.isEmpty && archived.isEmpty && notOpen.isEmpty {
+            if searching && pinned.isEmpty && recent.isEmpty && groups.isEmpty && asleep.isEmpty && archived.isEmpty && notOpen.isEmpty {
                 Text(store.deepSearching ? "Searching…" : "No sessions match “\(store.search)”")
                     .font(.callout).foregroundStyle(.secondary).selectionDisabled()
             }
@@ -231,10 +248,10 @@ struct Sidebar: View {
         }
     }
 
-    private func row(_ tab: SessionTab, _ ordered: [SessionTab]) -> some View {
+    private func row(_ tab: SessionTab, _ ordered: [SessionTab], compact: Bool = false) -> some View {
         TabRow(tab: tab, index: ordered.firstIndex { $0.id == tab.id }, note: store.history.note(tab.sessionId),
                isSplit: store.splitID == tab.id && store.selectedID != tab.id,
-               folderColor: store.folderColors.color(for: tab.cwd), hit: store.searchHit(tab.sessionId))
+               folderColor: store.folderColors.color(for: tab.cwd), hit: store.searchHit(tab.sessionId), compact: compact)
             .tag(tab.id)
             .contextMenu { menu(for: tab) }
             .listRowBackground(tab.color.map { c in
@@ -344,8 +361,34 @@ struct TabRow: View {
     var folderColor: Color = .secondary
     /// Where a full-text search matched this conversation.
     var hit: String? = nil
+    /// One dimmed line (Asleep section): moon, name, folder and when you last messaged it.
+    var compact = false
 
     var body: some View {
+        if compact { compactBody } else { fullBody }
+    }
+
+    private var compactBody: some View {
+        HStack(spacing: 6) {
+            if let color = tab.color {
+                RoundedRectangle(cornerRadius: 1.5).fill(color.swiftUI).frame(width: 3, height: 12)
+            }
+            Image(systemName: "moon.zzz.fill").font(.caption).foregroundStyle(.indigo.opacity(0.7)).frame(width: 14)
+            Text(tab.displayName).lineLimit(1)
+            if let agent = tab.agent, agent != .claude { AgentBadge(agent: agent) }
+            FolderLabel(text: FolderColors.shortPath(tab.cwd), color: folderColor).font(.caption).lineLimit(1)
+            Spacer(minLength: 4)
+            if tab.lastActive > .distantPast {
+                Text(Self.relative(tab.lastActive)).font(.caption).foregroundStyle(.tertiary).fixedSize()
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .opacity(0.75)
+        .help("\(tab.displayName)\n\(tab.status.label) · \(tab.shortPath)")
+    }
+
+    private var fullBody: some View {
         HStack(alignment: .top, spacing: 8) {
             if let color = tab.color {
                 RoundedRectangle(cornerRadius: 1.5)

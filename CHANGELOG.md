@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.14
+
+- Drag tabs into any order in the sidebar (the list, a folder group or Pinned). Your first drag switches to manual
+  order and they stay where you put them; sidebar menu or View → Last Message First switches back
+- Sleeping sessions move to their own compact "Asleep" section at the bottom: one dimmed line with a moon each.
+  Opening one wakes it and it goes back to its place
+- Codex and Antigravity tabs get the MCP servers Claude Code has for their folder (claude mcp add, and an approved
+  .mcp.json). Codex gets them at launch without touching its config; Antigravity's mcp_config.json gets them, and
+  Tabwise removes only the ones it added. claude.ai connectors (Gmail, Drive…) stay Claude-only. Settings → Share
+  Claude's MCP servers turns it off
+
 ## 0.1.13
 
 - Codex (OpenAI) and Antigravity (Google) tabs next to Claude: pick the agent in New Session (⌘T), or right-click a
