@@ -85,6 +85,13 @@ struct Sidebar: View {
                         }
                         .buttonStyle(.borderless)
                         .help(store.activeOnly ? "Showing only active sessions — click to show all" : "Show only active sessions (green dot)")
+                        if store.manualOrder {
+                            Button { store.manualOrder = false } label: {
+                                Image(systemName: "arrow.up.arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Tabs are in the order you dragged them — click to sort by last used again")
+                        }
                         Menu {
                             Toggle("Only Active Sessions", isOn: $store.activeOnly)
                             Divider()
@@ -94,7 +101,7 @@ struct Sidebar: View {
                             }
                             .pickerStyle(.inline)
                             Picker("Order", selection: $store.manualOrder) {
-                                Text("Last Message First").tag(false)
+                                Text("Last Used First").tag(false)
                                 Text("Manual (Drag to Reorder)").tag(true)
                             }
                             .pickerStyle(.inline)

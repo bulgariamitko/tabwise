@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15
+
+- Opening a sleeping tab or reopening a closed one counts as using it: it goes to the top, like a message does
+- When tabs are in your dragged order, a blue ↑↓ button at the top of the sidebar sorts them by last used again
+  (the order choice is now called "Last Used First")
+
 ## 0.1.14
 
 - Drag tabs into any order in the sidebar (the list, a folder group or Pinned). Your first drag switches to manual

@@ -531,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         view.addItem(.separator())
         add(view, "One List", #selector(setLayout(_:)), target: self, tag: 0)
         add(view, "Group by Folder", #selector(setLayout(_:)), target: self, tag: 1)
-        add(view, "Last Message First", #selector(setOrder(_:)), target: self, tag: 0)
+        add(view, "Last Used First", #selector(setOrder(_:)), target: self, tag: 0)
         add(view, "Manual Order (Drag to Reorder)", #selector(setOrder(_:)), target: self, tag: 1)
         view.addItem(.separator())
         add(view, "Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control])

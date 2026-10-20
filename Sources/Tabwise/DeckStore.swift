@@ -102,7 +102,7 @@ final class DeckStore: ObservableObject {
         didSet { UserDefaults.standard.set(layout.rawValue, forKey: "sidebarLayout") }
     }
 
-    /// Sidebar keeps tabs where you dragged them instead of putting the one you last messaged on top.
+    /// Sidebar keeps tabs where you dragged them instead of putting the one you last used on top.
     @Published var manualOrder = UserDefaults.standard.bool(forKey: "sidebarManualOrder") {
         didSet {
             UserDefaults.standard.set(manualOrder, forKey: "sidebarManualOrder")
@@ -192,7 +192,7 @@ final class DeckStore: ObservableObject {
     /// Pinned tabs, in the order you dragged them.
     var pinnedTabs: [SessionTab] { tabs.filter { $0.pinned && !$0.archived && shown($0) } }
 
-    /// Everything else that isn't archived or asleep: the session you last messaged first, or your dragged order.
+    /// Everything else that isn't archived or asleep: the session you last used first, or your dragged order.
     var recentTabs: [SessionTab] { unpinned { $0.status != .notStarted } }
 
     /// Unpinned tabs that are asleep, kept apart in a compact section at the bottom.
@@ -406,8 +406,16 @@ final class DeckStore: ObservableObject {
     }
 
     func wake(_ tab: SessionTab) {
+        if tab.status == .notStarted { markUsed(tab) }
         tab.startIfNeeded()
         objectWillChange.send()
+    }
+
+    /// Waking or reopening a session counts as using it: it goes to the top (unless you order tabs by hand).
+    private func markUsed(_ tab: SessionTab) {
+        tab.lastActive = Date()
+        objectWillChange.send()
+        scheduleSave()
     }
 
     func archive(_ tab: SessionTab) {
@@ -445,6 +453,7 @@ final class DeckStore: ObservableObject {
             return
         }
         let tab = SessionTab(saved: record)
+        tab.lastActive = Date()
         tab.archived = false
         tab.status = tab.isAgent ? .starting : .shell
         add(tab, select: true)
@@ -543,6 +552,7 @@ final class DeckStore: ObservableObject {
     }
 
     private func selectionChanged() {
+        if let tab = selected, tab.status == .notStarted { markUsed(tab) }
         selected?.startIfNeeded()
         // Jumping to a tab (⌘1…9, ⌘J, ⌘K) inside a collapsed folder group opens that group.
         if layout == .projects, let key = selected?.groupKey, collapsedGroups.contains(key) {
