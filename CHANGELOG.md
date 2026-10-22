@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.16
+
+- New mod, sudo-box: Claude runs commands that need sudo itself instead of asking you to paste them into a
+  terminal. A macOS password box shows the exact command; type your password and click Allow, and the output goes
+  straight back to Claude (Cancel stops it; nothing is stored). Settings → Mods turns it off
+
 ## 0.1.15
 
 - Opening a sleeping tab or reopening a closed one counts as using it: it goes to the top, like a message does
