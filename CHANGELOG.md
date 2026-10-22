@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.17
+
+- sudo-box: the password box now says what the command will do, in a sentence or two from Claude, above the
+  command itself, so you know what you're allowing before you type your password
+
 ## 0.1.16
 
 - New mod, sudo-box: Claude runs commands that need sudo itself instead of asking you to paste them into a
