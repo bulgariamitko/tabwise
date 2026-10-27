@@ -1128,6 +1128,9 @@ struct HistoryList: View {
     @State private var project: String?
     @AppStorage("historyShowEmpty") private var showEmpty = false
     @AppStorage("historyPinnedExpanded") private var pinnedExpanded = true
+    /// One collapsed row per folder (the folder used last on top) instead of one list of every session.
+    @AppStorage("historyByFolder") private var byFolder = false
+    @State private var openFolders: Set<String> = []
     @State private var renaming: HistoryItem?
     @State private var renameText = ""
     @State private var notingItem: HistoryItem?
@@ -1154,19 +1157,36 @@ struct HistoryList: View {
                         .onMove { history.movePinned(from: $0, to: $1, visible: pinned.map(\.id)) }
                 } header: { SectionHeader(title: "Pinned (\(pinned.count))", icon: "pin.fill", expanded: $pinnedExpanded) }
             }
-            Section {
-                ForEach(rest) { row($0) }
-            } header: {
-                HStack {
-                    Text(project.map { ($0 as NSString).lastPathComponent } ?? "All")
-                    Text("\(rest.count)").foregroundStyle(.tertiary)
-                    Spacer()
-                    if history.scanning { ProgressView().controlSize(.mini) }
+            if byFolder && project == nil {
+                ForEach(Self.folders(rest), id: \.path) { folder in
+                    Section(isExpanded: folderExpanded(folder.path)) {
+                        ForEach(folder.items) { row($0) }
+                    } header: { folderHeader(folder.items) }
+                }
+            } else {
+                Section {
+                    ForEach(rest) { row($0) }
+                } header: {
+                    HStack {
+                        Text(project.map { ($0 as NSString).lastPathComponent } ?? "All")
+                        Text("\(rest.count)").foregroundStyle(.tertiary)
+                        Spacer()
+                        if history.scanning { ProgressView().controlSize(.mini) }
+                    }
                 }
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 4) { SearchBar(store: store) { filterMenu } }
+        .safeAreaInset(edge: .top, spacing: 4) {
+            SearchBar(store: store) {
+                Button { withAnimation { byFolder.toggle() } } label: {
+                    Image(systemName: byFolder ? "folder.fill" : "folder")
+                }
+                .buttonStyle(.borderless)
+                .help(byFolder ? "Show every session, last used first" : "Group sessions by folder")
+                filterMenu
+            }
+        }
         .onAppear { history.refresh() }
         .alert("Rename session", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
@@ -1187,6 +1207,45 @@ struct HistoryList: View {
         }
     }
 
+    /// `items` (already last used first) by folder, the folder with the most recent session first.
+    private static func folders(_ items: [HistoryItem]) -> [(path: String, items: [HistoryItem])] {
+        var order: [String] = [], byPath: [String: [HistoryItem]] = [:]
+        for item in items {
+            let path = item.cwd ?? ""
+            if byPath[path] == nil { order.append(path) }
+            byPath[path, default: []].append(item)
+        }
+        return order.map { ($0, byPath[$0]!) }
+    }
+
+    /// Folders start closed; while searching they all open so every match shows.
+    private func folderExpanded(_ path: String) -> Binding<Bool> {
+        Binding(get: { store.isSearching || openFolders.contains(path) },
+                set: { open in if open { openFolders.insert(path) } else { openFolders.remove(path) } })
+    }
+
+    private func folderHeader(_ items: [HistoryItem]) -> some View {
+        let path = items.first?.cwd ?? ""
+        let expanded = folderExpanded(path)
+        return HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold))
+                .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                .foregroundStyle(.secondary)
+                .frame(width: 10)
+            FolderLabel(text: items.first?.folderName ?? "?", color: store.folderColors.color(for: items.first?.cwd))
+                .font(.callout.weight(.semibold))
+                .help(items.first?.cwd.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "")
+            Text("\(items.count)").font(.caption).foregroundStyle(.tertiary)
+            Spacer()
+            if let last = items.first?.lastActive {
+                Text(TabRow.relative(last)).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation { expanded.wrappedValue.toggle() } }
+    }
+
     private var filterMenu: some View {
         Menu {
             Button { project = nil } label: { Label("All Projects", systemImage: project == nil ? "checkmark" : "") }
@@ -1199,6 +1258,12 @@ struct HistoryList: View {
                     Label("\((f.path as NSString).lastPathComponent)  (\(f.count))", systemImage: project == f.path ? "checkmark" : "")
                 }
             }
+            Divider()
+            Picker("Order", selection: $byFolder) {
+                Text("Last Used First").tag(false)
+                Text("Group by Folder").tag(true)
+            }
+            .pickerStyle(.inline)
             Divider()
             Toggle("Show sessions with only one message", isOn: $showEmpty)
         } label: {
