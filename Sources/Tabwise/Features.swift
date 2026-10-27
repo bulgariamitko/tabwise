@@ -487,21 +487,63 @@ final class FolderColors: ObservableObject {
     @Published private(set) var overrides: [String: String] =
         UserDefaults.standard.dictionary(forKey: "folderColors") as? [String: String] ?? [:]
 
-    /// Ordered so that consecutive colors differ as much as possible.
-    private static let palette: [Color] = [
-        Color(hue: 0.60, saturation: 0.55, brightness: 1.0),   // blue
-        Color(hue: 0.08, saturation: 0.70, brightness: 1.0),   // orange
-        Color(hue: 0.36, saturation: 0.55, brightness: 0.90),  // green
-        Color(hue: 0.90, saturation: 0.50, brightness: 1.0),   // pink
-        Color(hue: 0.48, saturation: 0.60, brightness: 0.90),  // teal
-        Color(hue: 0.14, saturation: 0.65, brightness: 1.0),   // yellow
-        Color(hue: 0.76, saturation: 0.50, brightness: 1.0),   // purple
-        Color(hue: 0.00, saturation: 0.60, brightness: 1.0),   // red
-        Color(hue: 0.54, saturation: 0.60, brightness: 1.0),   // cyan
-        Color(hue: 0.24, saturation: 0.60, brightness: 0.95),  // lime
-        Color(hue: 0.68, saturation: 0.50, brightness: 1.0),   // indigo
-        Color(hue: 0.83, saturation: 0.55, brightness: 1.0),   // magenta
+    /// The first twelve, ordered so that consecutive colors differ as much as possible; folders past those
+    /// continue in `palette`, so no two folders share a color until there are hundreds of them.
+    private static let base: [(h: Double, s: Double, b: Double)] = [
+        (0.60, 0.55, 1.0),   // blue
+        (0.08, 0.70, 1.0),   // orange
+        (0.36, 0.55, 0.90),  // green
+        (0.90, 0.50, 1.0),   // pink
+        (0.48, 0.60, 0.90),  // teal
+        (0.14, 0.65, 1.0),   // yellow
+        (0.76, 0.50, 1.0),   // purple
+        (0.00, 0.60, 1.0),   // red
+        (0.54, 0.60, 1.0),   // cyan
+        (0.24, 0.60, 0.95),  // lime
+        (0.68, 0.50, 1.0),   // indigo
+        (0.83, 0.55, 1.0),   // magenta
     ]
+
+    /// `base`, then each next color is the one (of many hues and shades) farthest from every color before it,
+    /// measured in OKLab so "far" means looks different. Too-dark and too-pale ones are left out to stay readable.
+    private static let palette: [Color] = {
+        var candidates: [(h: Double, s: Double, b: Double)] = []
+        for step in 0..<90 {
+            for (sat, bri) in [(0.45, 1.0), (0.75, 1.0), (0.30, 1.0), (0.70, 0.85), (0.95, 1.0)] {
+                candidates.append((Double(step) / 90, sat, bri))
+            }
+        }
+        let readable = candidates.filter { (0.62...0.90).contains(oklab($0).l) }
+        var chosen = base
+        var labs = base.map(oklab)
+        var distance = readable.map { c in labs.map { gap(oklab(c), $0) }.min()! }
+        while chosen.count < 240 {
+            guard let i = distance.indices.max(by: { distance[$0] < distance[$1] }), distance[i] > 0 else { break }
+            let lab = oklab(readable[i])
+            chosen.append(readable[i])
+            labs.append(lab)
+            for j in distance.indices { distance[j] = min(distance[j], gap(oklab(readable[j]), lab)) }
+        }
+        return chosen.map { Color(hue: $0.h, saturation: $0.s, brightness: $0.b) }
+    }()
+
+    private static func oklab(_ c: (h: Double, s: Double, b: Double)) -> (l: Double, a: Double, b: Double) {
+        let ns = NSColor(colorSpace: .sRGB, hue: c.h, saturation: c.s, brightness: c.b, alpha: 1)
+        func linear(_ v: CGFloat) -> Double { let v = Double(v); return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        let r = linear(ns.redComponent), g = linear(ns.greenComponent), bl = linear(ns.blueComponent)
+        let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * bl)
+        let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * bl)
+        let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * bl)
+        return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+                1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+    }
+
+    private static func gap(_ x: (l: Double, a: Double, b: Double), _ y: (l: Double, a: Double, b: Double)) -> Double {
+        let dl = x.l - y.l, da = x.a - y.a, db = x.b - y.b
+        return dl * dl + da * da + db * db
+    }
+
     /// Automatic assignments (folder → palette index); not published, written as folders first appear.
     private var assigned: [String: Int] = UserDefaults.standard.dictionary(forKey: "folderColorSlots") as? [String: Int] ?? [:]
 
