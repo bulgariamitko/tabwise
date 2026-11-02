@@ -281,9 +281,8 @@ struct Sidebar: View {
                 Button {
                     store.setColor(tab, c)
                 } label: {
-                    Label(c.name, systemImage: tab.color == c ? "checkmark.circle.fill" : "circle.fill")
+                    Label { Text(c.name) } icon: { c.menuDot(checked: tab.color == c) }
                 }
-                .tint(c.swiftUI)
             }
             Divider()
             Button("No Color") { store.setColor(tab, nil) }.disabled(tab.color == nil)
@@ -472,6 +471,23 @@ extension TabColor {
         case .pink: .pink
         case .gray: .gray
         }
+    }
+
+    /// A dot in this color for menus, which draw SF Symbols monochrome and ignore `.tint`.
+    func menuDot(checked: Bool) -> Image {
+        let size = NSSize(width: 14, height: 14)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor(swiftUI).setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+            if checked, let mark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 8, weight: .bold).applying(.init(paletteColors: [.white]))) {
+                mark.draw(in: NSRect(x: (rect.width - mark.size.width) / 2, y: (rect.height - mark.size.height) / 2,
+                                     width: mark.size.width, height: mark.size.height))
+            }
+            return true
+        }
+        image.isTemplate = false
+        return Image(nsImage: image)
     }
 }
 

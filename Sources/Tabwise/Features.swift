@@ -604,9 +604,8 @@ struct FolderColorMenu: View {
                 Divider()
                 ForEach(TabColor.allCases) { c in
                     Button { colors.set(c, for: path) } label: {
-                        Label(c.name, systemImage: colors.override(for: path) == c ? "checkmark.circle.fill" : "circle.fill")
+                        Label { Text(c.name) } icon: { c.menuDot(checked: colors.override(for: path) == c) }
                     }
-                    .tint(c.swiftUI)
                 }
             }
         }
