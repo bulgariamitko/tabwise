@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.18
+
+- Links and file paths in a session underline when you hover them and open with a plain click (no more copy and
+  paste; ⌘ no longer needed)
+- Every folder gets its own color: up to 240 distinct colors instead of 12 that repeated
+- All Sessions can group conversations by folder: the folder button by the search box, or Order in the filter menu
+- The color dots in the Color and Folder Color menus show their colors again (newer macOS drew them all white)
+
 ## 0.1.17
 
 - sudo-box: the password box now says what the command will do, in a sentence or two from Claude, above the
