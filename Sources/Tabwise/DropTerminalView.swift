@@ -18,6 +18,8 @@ final class DropTerminalView: LocalProcessTerminalView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL, .png, .tiff])
+        // Links (and file paths) underline on hover and open with a plain click, not only ⌘-click.
+        linkHighlightMode = .hover
         _ = Self.deleteWordMonitor
     }
 
