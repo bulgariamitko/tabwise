@@ -14,9 +14,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 if [ "$UNIVERSAL" = "1" ]; then
   # SwiftTerm's build plugin breaks multi-arch builds, so build each architecture and merge.
-  for t in arm64-apple-macosx14.0 x86_64-apple-macosx14.0; do swift build -c release --scratch-path "$SCRATCH" --triple $t; done
-  lipo -create -output "$APP/Contents/MacOS/Tabwise" \
-    "$SCRATCH/arm64-apple-macosx/release/Tabwise" "$SCRATCH/x86_64-apple-macosx/release/Tabwise"
+  # Each build writes to the same bin path, so copy it out before the next one (asking SwiftPM, because the path
+  # moves between toolchains; a hard-coded one silently shipped a stale binary in 0.1.18).
+  SLICES=()
+  for t in arm64-apple-macosx14.0 x86_64-apple-macosx14.0; do
+    swift build -c release --scratch-path "$SCRATCH" --triple $t
+    cp "$(swift build -c release --scratch-path "$SCRATCH" --triple $t --show-bin-path)/Tabwise" "$APP/Contents/MacOS/Tabwise.$t"
+    SLICES+=("$APP/Contents/MacOS/Tabwise.$t")
+  done
+  lipo -create -output "$APP/Contents/MacOS/Tabwise" "${SLICES[@]}"
+  rm "${SLICES[@]}"
 else
   swift build -c release --scratch-path "$SCRATCH"
   cp "$(swift build -c release --scratch-path "$SCRATCH" --show-bin-path)/Tabwise" "$APP/Contents/MacOS/Tabwise"
