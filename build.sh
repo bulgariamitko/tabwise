@@ -85,9 +85,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Local builds: sign with your Apple Development certificate, so macOS keeps permissions such as the
-# microphone across rebuilds (an ad-hoc signature changes every build and resets them).
+# Local builds: sign with the same Developer ID certificate as releases when it's installed, so macOS
+# treats them as the same app. Permissions are tied to the signature: a build signed differently
+# (Apple Development, or ad-hoc, which changes every build) that asks for e.g. Screen Recording takes
+# the grant over, and the installed release then keeps asking although Settings shows it allowed.
 if [ "${SKIP_SIGN:-}" != "1" ]; then
+  SIGN_ID="${SIGN_ID:-$(security find-identity -p codesigning -v | awk -F'"' '/Developer ID Application/{print $2; exit}')}"
   SIGN_ID="${SIGN_ID:-$(security find-identity -p codesigning -v | awk -F'"' '/Apple Development/{print $2; exit}')}"
   xattr -cr "$APP"   # Dropbox tags files in this folder; codesign rejects extended attributes
   codesign --force --deep -s "${SIGN_ID:--}" "$APP"
