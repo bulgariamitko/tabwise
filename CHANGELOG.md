@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.20
+
+- Right-click a folder in Finder for "New Tabwise Session Here" or "Continue Tabwise Session Here" (under Quick Actions or Services)
+
 ## 0.1.19
 
 - 0.1.18's download contained an older build by mistake, so what it listed didn't arrive. This version really has it:
