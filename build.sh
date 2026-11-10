@@ -76,6 +76,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHumanReadableCopyright</key><string>© 2026 Dimitar Klaturov. MIT License.</string>
   <key>NSMicrophoneUsageDescription</key><string>Claude Code voice mode (hold Space to talk) records from the microphone inside Tabwise's terminals.</string>
   <key>NSAppleEventsUsageDescription</key><string>Tabwise closes the old Terminal windows of sessions you import.</string>
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key><dict><key>default</key><string>New Tabwise Session Here</string></dict>
+      <key>NSMessage</key><string>newSession</string>
+      <key>NSPortName</key><string>Tabwise</string>
+      <key>NSSendFileTypes</key><array><string>public.folder</string></array>
+      <key>NSRequiredContext</key><dict/>
+    </dict>
+    <dict>
+      <key>NSMenuItem</key><dict><key>default</key><string>Continue Tabwise Session Here</string></dict>
+      <key>NSMessage</key><string>continueSession</string>
+      <key>NSPortName</key><string>Tabwise</string>
+      <key>NSSendFileTypes</key><array><string>public.folder</string></array>
+      <key>NSRequiredContext</key><dict/>
+    </dict>
+  </array>
   <key>SUFeedURL</key><string>https://github.com/bulgariamitko/tabwise/releases/latest/download/appcast.xml</string>
   <key>SUPublicEDKey</key><string>Bssoy3sPcGjJ4B5GJsbgfv1ylCjUXk/m6cubgoc1Sws=</string>
   <key>SUEnableAutomaticChecks</key><true/>

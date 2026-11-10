@@ -286,6 +286,17 @@ final class DeckStore: ObservableObject {
             }
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        launched = true
+        afterLaunch.forEach { $0() }
+        afterLaunch = []
+    }
+
+    private var launched = false
+    private var afterLaunch: [() -> Void] = []
+    /// Runs `work` once the saved tabs are back, e.g. a Finder request that launched the app: a tab added before
+    /// that would be overwritten by the restore.
+    func whenLaunched(_ work: @escaping () -> Void) {
+        if launched { work() } else { afterLaunch.append(work) }
     }
 
     // MARK: Tabs

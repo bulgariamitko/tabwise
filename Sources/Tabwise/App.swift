@@ -136,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             window.orderFrontRegardless()
         }
         Migration.offerRemovingOldApp()
+        FinderServices.register(store)
         setupStatusItem()
         store.onPolled = { [weak self] in self?.updateStatusItem() }
         // A fresh install with a backup available (e.g. a new Mac): offer to restore everything.
