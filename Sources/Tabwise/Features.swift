@@ -50,6 +50,15 @@ enum DeckSettings {
     }
 }
 
+/// The model router's two switches, published so the Settings window follows when a session's menu turns
+/// one on ("Automatic" while it's off).
+@MainActor
+final class RouterSwitches: ObservableObject {
+    static let shared = RouterSwitches()
+    @Published var model = Router.routeModel { didSet { if Router.routeModel != model { Router.routeModel = model } } }
+    @Published var effort = Router.routeEffort { didSet { if Router.routeEffort != effort { Router.routeEffort = effort } } }
+}
+
 struct SavedPrompt: Codable, Identifiable, Hashable {
     var id = UUID()
     var text: String
@@ -109,6 +118,10 @@ struct SettingsView: View {
     @State private var modsDevFolder = Mods.devFolder ?? ""
     @State private var newPrompt = ""
     @FocusState private var newPromptFocused: Bool
+    @ObservedObject private var router = RouterSwitches.shared
+    @State private var routerAgent = Agent.claude
+    /// Bumped when a tier's model or effort is edited, so the fields re-read what was saved.
+    @State private var routerEdits = 0
 
     private func addPrompt() {
         // Commit text an input method is still composing (it isn't in `newPrompt` until then), and read it once
@@ -173,6 +186,58 @@ struct SettingsView: View {
         }
     }
 
+    private var routerSection: some View {
+        Section("Model Router") {
+            Toggle("Choose the model automatically", isOn: $router.model)
+                .onChange(of: router.model) { _, _ in store.routerChanged() }
+            Toggle("Choose the effort automatically", isOn: $router.effort)
+                .onChange(of: router.effort) { _, _ in store.routerChanged() }
+            Text("Tabwise reads each message you send and judges the job. A new conversation starts on the model that fits its first message. After that it moves up when the work clearly gets harder. It moves down while the conversation is still short, or after an hour's pause, when the agent would re-read the conversation at full price on any model. A switch restarts the agent on the other model and resumes the conversation, which takes a few seconds.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("To choose yourself: right-click a session → Model or Effort and set them for that session only; the other sessions stay automatic. You can also write \"use Fable\" or \"use a cheaper model\" in a message.")
+                .font(.caption).foregroundStyle(.secondary)
+            if router.model || router.effort {
+                Picker("Agent", selection: $routerAgent) {
+                    ForEach(Agent.allCases) { Text($0.name).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                ForEach(Tier.allCases) { tier in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tier.name)
+                            Text(tier.hint).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        TextField("Model", text: Binding(
+                            get: { _ = routerEdits; return Router.choice(routerAgent, tier).model },
+                            set: { v in
+                                var c = Router.choice(routerAgent, tier); c.model = v
+                                Router.setChoice(c, routerAgent, tier); routerEdits += 1; store.objectWillChange.send()
+                            }), prompt: Text("\(routerAgent.name)'s own"))
+                            .labelsHidden()
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 170)
+                            .disabled(!router.model)
+                        Picker("Effort", selection: Binding(
+                            get: { _ = routerEdits; return Router.choice(routerAgent, tier).effort },
+                            set: { v in
+                                var c = Router.choice(routerAgent, tier); c.effort = v
+                                Router.setChoice(c, routerAgent, tier); routerEdits += 1; store.objectWillChange.send()
+                            })) {
+                            Text("own").tag("")
+                            ForEach(Router.efforts, id: \.self) { Text($0).tag($0) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 90)
+                        .disabled(!router.effort)
+                    }
+                }
+                Text(Router.modelHelp(routerAgent))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     var body: some View {
         Form {
             Section("Sessions") {
@@ -206,6 +271,7 @@ struct SettingsView: View {
                 Text("Codex and Antigravity tabs get the MCP servers Claude Code has for their folder (claude mcp add, and a project's .mcp.json once you've approved it in Claude). claude.ai connectors like Gmail or Drive sign in through your Claude account and stay Claude-only. Applies when a tab starts or restarts.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            routerSection
             modsSection
             Section("Backup") {
                 Toggle("Back up to \(destination)", isOn: $backupOn)

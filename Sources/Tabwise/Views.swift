@@ -339,6 +339,26 @@ struct Sidebar: View {
                 store.splitID = store.splitID == tab.id ? nil : tab.id
             }
         }
+        if tab.isAgent, !tab.archived {
+            // This session's model and effort: automatic, or what you set here.
+            ForEach([true, false], id: \.self) { isModel in
+                Menu(isModel ? "Model" : "Effort") {
+                    let groups = PickMenu.groups(tab, model: isModel)
+                    ForEach(groups.indices, id: \.self) { g in
+                        if g > 0 { Divider() }
+                        ForEach(groups[g]) { row in
+                            if row.pick == nil {
+                                Button(row.title) { PickMenu.choose(row, tab, model: isModel, store: store) }
+                            } else {
+                                Toggle(row.title, isOn: Binding(get: { row.on }, set: { _ in
+                                    PickMenu.choose(row, tab, model: isModel, store: store)
+                                }))
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if !tab.archived {
             Button(tab.isAgent ? "Restart (resume conversation)" : "Restart") { tab.restart() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
@@ -611,8 +631,20 @@ struct TabMeta: View {
     @ObservedObject var tab: SessionTab
     var body: some View {
         let showMemory = !tab.archived && tab.memory > 0
-        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone {
+        // What the session runs on, when Tabwise set it: the router's choice (wand) or your own (pin).
+        let routed = tab.archived ? nil : tab.agent.flatMap {
+            Router.label($0, tier: tab.tier, model: tab.modelPick, effort: tab.effortPick)
+        }
+        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone || routed != nil {
             HStack(spacing: 10) {
+                if let routed {
+                    let automatic = tab.modelPick == .auto && tab.effortPick == .auto
+                    Label(routed, systemImage: automatic ? "wand.and.stars" : "pin")
+                        .foregroundStyle(.secondary)
+                        .help((automatic ? "Chosen automatically for this session." : "Set by you for this session.")
+                              + (tab.routeNote.map { "\n\($0)" } ?? "")
+                              + "\nRight-click the tab → Model or Effort to change it.")
+                }
                 if tab.sendWhenDone {
                     Label("Sends when done", systemImage: "paperplane")
                         .foregroundStyle(.green.opacity(0.9))

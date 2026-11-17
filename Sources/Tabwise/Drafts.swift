@@ -61,6 +61,11 @@ enum DraftReader {
             || lines[last...].contains { compact($0).hasPrefix("⎿Interrupted") }
     }
 
+    /// How many screen lines the text in the box takes (Claude, Antigravity); nil when no box is on screen.
+    static func lineCount(_ terminal: Terminal) -> Int? {
+        inputBox(rows(terminal)).map { $0.bottom - $0.top - 1 }
+    }
+
     /// The unsent text in the input box, "" when it's empty, nil when no input box is on screen.
     static func read(_ terminal: Terminal) -> String? {
         let screen = rows(terminal)
@@ -93,10 +98,81 @@ enum DraftReader {
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Debug aid: the bottom of the screen with faint characters marked, written when TABWISE_DEBUG_DRAFTS is set.
-    static func dump(_ terminal: Terminal) -> String {
-        rows(terminal).suffix(14).map { row in
+    /// Codex's message box has no frame: "› text" at the left edge, further lines indented under it, then an
+    /// empty line. Its menus mark the chosen row with the same "›" ("› 1. Update now"), so the box only counts
+    /// when the cursor is in it. "" when it's empty (the hint in it is dim), nil when it isn't on screen.
+    static func readCodex(_ terminal: Terminal) -> String? {
+        let screen = rows(terminal)
+        guard let box = codexBox(screen, cursorRow: terminal.getCursorLocation().y) else { return nil }
+        let top = box.lowerBound
+        var out = ""
+        for i in box {
+            let (chars, faint) = screen[i]
+            var line = ""
+            for j in min(2, chars.count)..<chars.count where !faint[j] { line.append(chars[j]) }
+            line = line.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+            if i == top { out = line; continue }
+            // A line broken by the box's width continues the sentence; one you broke yourself starts a new line.
+            let previous = out.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+            let word = line.split(separator: " ").first.map(String.init) ?? ""
+            let wrapped = previous.count + 1 + word.count > terminal.cols - 4
+            out += (wrapped ? " " : "\n") + line
+        }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func codexBox(_ screen: [(text: [Character], faint: [Bool])], cursorRow: Int) -> ClosedRange<Int>? {
+        let isBlank: (Int) -> Bool = { screen[$0].text.allSatisfy { $0 == " " } }
+        guard let top = screen.indices.last(where: { i in
+            let t = screen[i].text
+            return t.first == "›" && (t.count < 2 || t[1] == " ")
+        }) else { return nil }
+        var bottom = top
+        while bottom + 1 < screen.count, !isBlank(bottom + 1), screen[bottom + 1].text.prefix(2).allSatisfy({ $0 == " " }) { bottom += 1 }
+        return (top...bottom).contains(cursorRow) ? top...bottom : nil
+    }
+
+    /// How many screen lines the text in Codex's box takes; nil when the box isn't on screen.
+    static func codexLineCount(_ terminal: Terminal) -> Int? {
+        codexBox(rows(terminal), cursorRow: terminal.getCursorLocation().y)?.count
+    }
+
+    /// Debug aid: the screen with faint characters marked, written when TABWISE_DEBUG_DRAFTS is set (`all`: every
+    /// row down to the last one with text; else the bottom rows, where Claude's box is).
+    static func dump(_ terminal: Terminal, all: Bool = false) -> String {
+        var screen = rows(terminal)
+        if all { while let last = screen.last, last.text.allSatisfy({ $0 == " " }) { screen.removeLast() } }
+        return (all ? screen[...] : screen.suffix(14)).map { row in
             String(row.text) + "\n" + String(row.faint.map { $0 ? "·" : " " })
         }.joined(separator: "\n")
+    }
+}
+
+/// What's typed in an agent's message box, read off the screen: "" when the box is empty, nil when it isn't
+/// on screen (a menu, a question, a startup screen).
+enum InputBox {
+    static func read(_ agent: Agent, _ terminal: Terminal) -> String? {
+        switch agent {
+        // Antigravity frames its box the way Claude does: a line, "> text", a line.
+        case .claude, .antigravity: return DraftReader.read(terminal)
+        case .codex: return DraftReader.readCodex(terminal)
+        }
+    }
+
+    /// Whether the box surely shows all of the message. One that fills much of the screen may be showing only
+    /// part of a longer text.
+    static func showsAll(_ agent: Agent, _ terminal: Terminal) -> Bool {
+        let lines = agent == .codex ? DraftReader.codexLineCount(terminal) : DraftReader.lineCount(terminal)
+        return lines.map { $0 <= max(3, terminal.rows / 2) } ?? false
+    }
+
+    /// Whether the message can be sent again from what the screen shows. Pasted blocks and images appear only
+    /// as placeholders ("[Pasted text #1 +20 lines]", "[Image #1]"), and a command for the agent itself ("/…",
+    /// "!…", "$…") or a name still being completed ("@src/…") must reach the agent as typed.
+    static func resendable(_ text: String) -> Bool {
+        guard let first = text.first, !"/!#$".contains(first) else { return false }
+        if text.range(of: #"\[(Pasted text|Image|Pasted content|Attachment)[^\]]*\]"#, options: .regularExpression) != nil { return false }
+        if let last = text.split(whereSeparator: \.isWhitespace).last, last.hasPrefix("@") || last.hasPrefix("/") { return false }
+        return true
     }
 }

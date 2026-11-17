@@ -238,6 +238,12 @@ struct TranscriptInfo: Equatable {
     var previewIsUser = false
     /// Time of your most recent message in this conversation.
     var lastUserAt: Date?
+    /// What the last reply was written with, how many tokens the conversation held then, and when it came
+    /// (the model router works from these).
+    var model: String?
+    var effort: String?
+    var contextTokens: Int?
+    var lastReplyAt: Date?
 }
 
 final class TranscriptReader {
@@ -258,7 +264,12 @@ final class TranscriptReader {
         let size = (attrs[.size] as? NSNumber)?.intValue ?? 0
 
         var info = cache[sessionId] ?? TranscriptInfo()
-        let tail = parse(lines: readTail(url, bytes: 512 * 1024))
+        let tailLines = readTail(url, bytes: 512 * 1024)
+        let tail = parse(lines: tailLines)
+        if let reply = Self.lastReply(lines: tailLines) {
+            info.model = reply.model; info.effort = reply.effort
+            info.contextTokens = reply.tokens; info.lastReplyAt = reply.at
+        }
         if let p = tail.preview { info.preview = p; info.previewIsUser = tail.previewIsUser }
         if let t = tail.title { info.title = t }
         if let d = tail.lastUserAt { info.lastUserAt = d }
@@ -348,6 +359,21 @@ final class TranscriptReader {
         }
         if info.title == nil { info.title = aiTitle }
         return info
+    }
+
+    /// The model, effort and conversation size of Claude's most recent reply (subagents' replies aside).
+    private static func lastReply(lines: [Substring]) -> (model: String, effort: String?, tokens: Int, at: Date?)? {
+        for line in lines.reversed() where line.contains("\"type\":\"assistant\"") && line.contains("\"usage\"") {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  obj["type"] as? String == "assistant", obj["isSidechain"] as? Bool != true,
+                  let message = obj["message"] as? [String: Any],
+                  let model = message["model"] as? String, !model.hasPrefix("<") else { continue } // "<synthetic>": an error note
+            let usage = message["usage"] as? [String: Any] ?? [:]
+            let tokens = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+                .reduce(0) { $0 + ((usage[$1] as? NSNumber)?.intValue ?? 0) }
+            return (model, obj["effort"] as? String, tokens, (obj["timestamp"] as? String).flatMap(parseDate))
+        }
+        return nil
     }
 
     private static let isoFractional: ISO8601DateFormatter = {

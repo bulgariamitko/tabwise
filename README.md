@@ -17,6 +17,11 @@ in a sidebar with live status, and nothing is lost when you quit, restart, or mo
 - **Import** the sessions you already have running in Terminal, or **resume** any session by pasting `claude --resume <id>` (flags are kept).
 - **Split view**, <kbd>⌘K</kbd> quick switcher, menu bar icon with live counts.
 
+**Model router** (off by default; Settings → Model Router)
+- Tabwise reads the message you send and **puts the job on the model that fits it**: a light model for questions and chores, your everyday model for normal work, the strongest one for design, hard bugs and big changes. It works the same way for Claude Code, Codex and Antigravity, and you choose the model and effort for each level.
+- It switches **only when that pays off**: at a conversation's first message, up when the work clearly gets harder, and down while the conversation is still short or after an hour's pause. A switch makes the agent re-read the whole conversation at full price, so changing models on every message would cost more, not less.
+- **Each session can have its own model and effort**: right-click it → Model or Effort to set them by hand for that session, and leave the others automatic. This works with the router off too. Or just write "use Fable" or "use a cheaper model" in a message.
+
 **History**
 - **All Sessions** lists every past conversation on your Mac with its title, folder and last message — with pins, full-text search (Latin and Cyrillic), and one-click resume.
 

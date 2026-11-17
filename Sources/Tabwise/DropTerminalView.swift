@@ -21,6 +21,7 @@ final class DropTerminalView: LocalProcessTerminalView {
         // Links (and file paths) underline on hover and open with a plain click, not only ⌘-click.
         linkHighlightMode = .hover
         _ = Self.deleteWordMonitor
+        _ = Self.returnMonitor
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -35,6 +36,22 @@ final class DropTerminalView: LocalProcessTerminalView {
         terminal.send(txt: "\u{17}")
         return nil
     }
+
+    /// Set by the owning tab: Return was pressed here. True when the model router took the message over (it
+    /// restarts the agent on another model and sends the message itself), so the key must not reach the agent.
+    var routeReturn: () -> Bool = { false }
+
+    /// Plain Return goes past the model router first. Not while an input method is composing: there Return
+    /// only confirms the word.
+    private static let returnMonitor: Any? = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard event.keyCode == 36 || event.keyCode == 76, mods.isEmpty, !event.isARepeat,
+              let terminal = event.window?.firstResponder as? DropTerminalView, !terminal.hasMarkedText() else { return event }
+        return terminal.routeReturn() ? nil : event
+    }
+
+    /// The view shows the live bottom of the terminal, not an earlier part you scrolled back to.
+    var atBottom: Bool { !canScroll || scrollPosition >= 1 }
 
     private var repaintScheduled = false
 

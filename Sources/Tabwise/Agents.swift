@@ -208,10 +208,27 @@ enum AgentSessions {
                 }
             }
             let firstPrompt = messages(lines(url, head: 256 * 1024)).first { $0.role == "user" }?.text
-            let recent = messages(lines(url, tail: 1024 * 1024))
+            let tail = lines(url, tail: 1024 * 1024)
+            let recent = messages(tail)
             if let last = recent.last { info.preview = last.text; info.previewIsUser = last.role == "user" }
             info.lastUserAt = recent.last { $0.role == "user" }?.at
             info.title = codexThreadName(sessionId) ?? firstPrompt
+            // Each turn notes its model and effort ("turn_context"); "token_count" has what the last request held.
+            for line in tail.reversed() where info.model == nil || info.contextTokens == nil {
+                let isTurn = line.contains("\"turn_context\""), isCount = line.contains("\"token_count\"")
+                guard isTurn || isCount, let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let payload = obj["payload"] as? [String: Any] else { continue }
+                if info.model == nil, obj["type"] as? String == "turn_context", let model = payload["model"] as? String {
+                    info.model = model
+                    info.effort = payload["effort"] as? String
+                }
+                if info.contextTokens == nil, payload["type"] as? String == "token_count",
+                   let last = (payload["info"] as? [String: Any])?["last_token_usage"] as? [String: Any],
+                   let input = (last["input_tokens"] as? NSNumber)?.intValue {
+                    info.contextTokens = input
+                    info.lastReplyAt = (obj["timestamp"] as? String).flatMap(TranscriptReader.parseDate)
+                }
+            }
         case .antigravity:
             // One line per step: USER_INPUT (your message, wrapped in <USER_REQUEST>), PLANNER_RESPONSE (its replies
             // and tool calls), and tool results. Long conversations grow large; the start and end are enough.
@@ -232,10 +249,20 @@ enum AgentSessions {
                 }
             }
             let firstPrompt = messages(lines(url, head: 256 * 1024)).first { $0.user }?.text
-            let recent = messages(lines(url, tail: 1024 * 1024))
+            let tail = lines(url, tail: 1024 * 1024)
+            let recent = messages(tail)
             if let last = recent.last { info.preview = last.text; info.previewIsUser = last.user }
             info.lastUserAt = recent.last { $0.user }?.at
             info.title = agyTitle(sessionId) ?? firstPrompt
+            // Each reply notes the model it was written with and the tokens it was sent.
+            for line in tail.reversed() where line.contains("\"PLANNER_RESPONSE\"") && line.contains("\"model\"") {
+                guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let model = obj["model"] as? String else { continue }
+                info.model = model
+                info.contextTokens = ["input_tokens", "cache_read_tokens"].reduce(0) { $0 + ((obj[$1] as? NSNumber)?.intValue ?? 0) }
+                info.lastReplyAt = (obj["created_at"] as? String).flatMap(TranscriptReader.parseDate)
+                break
+            }
         }
         return info
     }

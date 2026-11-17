@@ -25,6 +25,21 @@ enum AppActions {
         return url.path
     }
 
+    /// "Other…" in a session's Model menu: a model name typed by hand.
+    static func askModel(_ agent: Agent) -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Model for this session"
+        alert.informativeText = "Type the model's name the way \(agent.name) knows it."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Use")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+
     /// The agent the New Session panel offers first: the one you picked last time.
     static var lastAgent: Agent {
         get { UserDefaults.standard.string(forKey: "newSessionAgent").flatMap(Agent.init) ?? .claude }
@@ -137,6 +152,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         Migration.offerRemovingOldApp()
         FinderServices.register(store)
+        if let steps = ProcessInfo.processInfo.environment["TABWISE_TEST_MENU"] { // test hook: "Model=Opus;Effort=high"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 14) { [weak self] in
+                self?.testMenu(steps.split(separator: ";").map(String.init))
+            }
+        }
+        if ProcessInfo.processInfo.environment["TABWISE_TEST_SETTINGS"] != nil { // test hook: show Settings
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.openSettings(nil) }
+        }
         setupStatusItem()
         store.onPolled = { [weak self] in self?.updateStatusItem() }
         // A fresh install with a backup available (e.g. a new Mac): offer to restore everything.
@@ -253,6 +276,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if let tab = store.selected { AppActions.close(tab, store: store) } else { window.performClose(nil) }
     }
     @objc func restartTab(_ sender: Any?) { store.selected?.restart() }
+    /// File → Model / Effort: the same rows as the tab's right-click menu, for the selected session.
+    private func rebuildPickMenu(_ menu: NSMenu, model: Bool) {
+        menu.removeAllItems()
+        guard let tab = store.selected, tab.isAgent, !tab.archived else {
+            menu.addItem(NSMenuItem(title: "Select a session first", action: nil, keyEquivalent: ""))
+            return
+        }
+        for (i, group) in PickMenu.groups(tab, model: model).enumerated() {
+            if i > 0 { menu.addItem(.separator()) }
+            for row in group {
+                let item = NSMenuItem(title: row.title, action: #selector(pickFromMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.state = row.on ? .on : .off
+                item.representedObject = PickMenu.Chosen(row: row, model: model)
+                menu.addItem(item)
+            }
+        }
+    }
+    /// Test hook: choose rows of File → Model / Effort by title, one every 12 seconds, noting what the menu showed.
+    private func testMenu(_ steps: [String]) {
+        guard let step = steps.first else { return }
+        let parts = step.split(separator: "=", maxSplits: 1).map(String.init)
+        if parts.count == 2, let menu = parts[0] == "Model" ? modelMenu : effortMenu {
+            rebuildPickMenu(menu, model: parts[0] == "Model")
+            let rows = menu.items.map { $0.isSeparatorItem ? "—" : ($0.state == .on ? "✓" : "") + $0.title }.joined(separator: " | ")
+            let url = DeckStore.stateURL.deletingLastPathComponent().appendingPathComponent("menu-debug.txt")
+            let line = "\(parts[0]): \(rows)\n"
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+            else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+            if let item = menu.items.first(where: { $0.title == parts[1] }) { pickFromMenu(item) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.testMenu(Array(steps.dropFirst())) }
+    }
+    @objc func pickFromMenu(_ sender: NSMenuItem) {
+        guard let tab = store.selected, let chosen = sender.representedObject as? PickMenu.Chosen else { return }
+        PickMenu.choose(chosen.row, tab, model: chosen.model, store: store)
+    }
     @objc func sleepTab(_ sender: Any?) { if let t = store.selected { AppActions.toggleSleep(t, store: store) } }
     @objc func sendWhenDone(_ sender: Any?) { if let t = store.selected { store.toggleSendWhenDone(t) } }
     @objc func renameTab(_ sender: Any?) { store.renameRequest = store.selected }
@@ -358,6 +418,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc func showFromStatus(_ sender: Any?) { bringToFront() }
 
     private weak var promptsMenu: NSMenu?
+    private weak var modelMenu: NSMenu?
+    private weak var effortMenu: NSMenu?
     private var promptsWatch: AnyCancellable?
 
     /// Kept populated at all times so ⌃⌘1…9 work without opening the menu first.
@@ -390,6 +452,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         if menu === promptsMenu {
             rebuildPromptsMenu(store.prompts.prompts)
+            return
+        }
+        if menu === modelMenu || menu === effortMenu {
+            rebuildPickMenu(menu, model: menu === modelMenu)
             return
         }
         menu.removeAllItems()
@@ -495,6 +561,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         add(file, "Import Sessions…", #selector(importSessions(_:)), "i", [.command, .shift], target: self)
         file.addItem(.separator())
         add(file, "Restart Tab", #selector(restartTab(_:)), "r", [.command, .shift], target: self)
+        // The selected session's model and effort; filled when opened (menuNeedsUpdate).
+        for title in ["Model", "Effort"] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            menu.delegate = self
+            item.submenu = menu
+            file.addItem(item)
+            if title == "Model" { modelMenu = menu } else { effortMenu = menu }
+        }
         add(file, "Put Tab to Sleep", #selector(sleepTab(_:)), "s", target: self)
         add(file, "Put Other Tabs to Sleep", #selector(sleepOthers(_:)), "s", [.command, .option], target: self)
         add(file, "Send Draft When Claude Finishes", #selector(sendWhenDone(_:)), "\r", target: self)
@@ -580,5 +655,63 @@ struct Main {
         app.delegate = delegate
         app.setActivationPolicy(.regular)
         app.run()
+    }
+}
+
+/// The rows of a session's Model or Effort menu: automatic, the names to choose from, the agent's own setting.
+/// Shown in the tab's right-click menu and under File.
+@MainActor
+enum PickMenu {
+    struct Row: Identifiable {
+        let id: String
+        let title: String
+        /// nil: "Other…", which asks for a model name.
+        let pick: Pick?
+        let on: Bool
+    }
+
+    /// A row picked from the File menu, with which of the two menus it came from.
+    final class Chosen: NSObject {
+        let row: Row
+        let model: Bool
+        init(row: Row, model: Bool) { self.row = row; self.model = model }
+    }
+
+    static func groups(_ tab: SessionTab, model: Bool) -> [[Row]] {
+        guard let agent = tab.agent else { return [] }
+        let current = model ? tab.modelPick : tab.effortPick
+        let routed = model ? Router.routeModel : Router.routeEffort
+        // With the router off in Settings, a session left on automatic runs on the agent's own setting.
+        let shown = current == .auto && !routed ? Pick.own : current
+        func row(_ title: String, _ pick: Pick) -> Row {
+            Row(id: pick.saved ?? "auto", title: title, pick: pick, on: pick == shown)
+        }
+        var names: [Row]
+        if model {
+            var own: String?
+            if case .fixed(let name) = current { own = name }
+            names = Router.models(agent, also: own).map { row(Router.modelName(agent, $0), .fixed($0)) }
+            names.append(Row(id: "other", title: "Other…", pick: nil, on: false))
+        } else {
+            names = Router.efforts.map { row($0, .fixed($0)) }
+        }
+        return [
+            [row(routed ? "Automatic" : "Automatic (off: click to turn on)", .auto)],
+            names,
+            [row("\(agent.name)'s Own Setting", .own)],
+        ]
+    }
+
+    static func choose(_ row: Row, _ tab: SessionTab, model: Bool, store: DeckStore) {
+        var pick = row.pick
+        if pick == nil, let agent = tab.agent { pick = AppActions.askModel(agent).map(Pick.fixed) }
+        guard let pick else { return }
+        // Asking for automatic while the router is off in Settings turns that switch on (for every session
+        // left on automatic), the same as Settings → Model Router.
+        if pick == .auto {
+            if model { RouterSwitches.shared.model = true } else { RouterSwitches.shared.effort = true }
+        }
+        if model { store.setPicks(tab, model: pick) } else { store.setPicks(tab, effort: pick) }
+        store.routerChanged()
     }
 }

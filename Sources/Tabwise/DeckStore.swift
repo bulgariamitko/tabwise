@@ -234,6 +234,7 @@ final class DeckStore: ObservableObject {
     // MARK: Launch
 
     func launch() {
+        SessionTab.onReturn = { [weak self] tab in self?.returnPressed(tab) ?? false }
         let restored = load()
         if let data = try? Data(contentsOf: Self.closedURL),
            let closed = try? Self.decoder.decode([SavedTab].self, from: data) {
@@ -304,6 +305,9 @@ final class DeckStore: ObservableObject {
     func newClaude(in cwd: String, resume sessionId: String? = nil, args: [String] = []) {
         let tab = SessionTab(agent: .claude, sessionId: sessionId, cwd: cwd, customName: nil, group: nil)
         tab.extraArgs = args
+        // A new conversation starts on the everyday model; your first message can move it (see routeMessage).
+        // A resumed one stays on the agent's own model until the router learns what it runs on.
+        if sessionId == nil, Router.enabled { tab.tier = .everyday }
         if let id = sessionId { tab.customName = history.name(id) }
         add(tab, select: true)
     }
@@ -317,6 +321,7 @@ final class DeckStore: ObservableObject {
         sidebarMode = .open
         let tab = SessionTab(agent: agent, sessionId: nil, cwd: cwd)
         tab.continueLatest = continueLatest
+        if !continueLatest, Router.enabled { tab.tier = .everyday }
         add(tab, select: true)
     }
 
@@ -697,6 +702,10 @@ final class DeckStore: ObservableObject {
 
 
             if tab.status != previous { statusChanged = true }
+            if tab.rerouteWhenIdle, tab.status == .idle {
+                tab.reroute(to: tab.tier, sending: nil, note: tab.routeNote)
+                continue
+            }
             if tab.sendWhenDone { sendDraftIfDone(tab) }
             let finished = previous == .working && (tab.status == .idle || tab.status == .waiting)
             let nowWaiting = previous != .waiting && tab.status == .waiting
@@ -748,6 +757,14 @@ final class DeckStore: ObservableObject {
             tab.terminal.insert(prompts[tab.draftRestoreTries], submit: true)
             tab.draftRestoreTries += 1
         }
+        if let typed = ProcessInfo.processInfo.environment["TABWISE_TEST_AGENT_TYPE"], // test hook: type, don't send
+           tab.status == .idle, tab.draftRestoreTries == 0, Date().timeIntervalSince(tab.startedAt) > 8,
+           AgentScreen.lines(tab.terminal.getTerminal()).suffix(6).joined().lowercased()
+               .contains(agent == .codex ? "ask codex" : "? for shortcuts") {
+            tab.draftRestoreTries = 1
+            tab.terminal.insert(typed.replacingOccurrences(of: "\\n", with: "\n"), submit: false)
+            testReturn(tab)
+        }
         if Self.debugDrafts {
             let line = "\(Date()) \(agent.name) pid=\(pid ?? 0) \(tab.status.label) session=\(tab.sessionId ?? "-") title=\(tab.rawTitle ?? "-")\n"
             let url = Self.stateURL.deletingLastPathComponent().appendingPathComponent("agent-debug.txt")
@@ -756,16 +773,22 @@ final class DeckStore: ObservableObject {
             let screen = AgentScreen.lines(tab.terminal.getTerminal()).joined(separator: "\n")
             try? screen.write(to: url.deletingLastPathComponent().appendingPathComponent("agent-screen-\(agent.rawValue).txt"),
                               atomically: true, encoding: .utf8)
+            let t = tab.terminal.getTerminal()
+            let cursor = t.getCursorLocation()
+            let box = DraftReader.dump(t, all: true) + "\ncursor=\(cursor.x),\(cursor.y) rows=\(t.rows) cols=\(t.cols)\n=== parsed: [\(InputBox.read(agent, t) ?? "nil")]\n"
+            try? box.write(to: url.deletingLastPathComponent().appendingPathComponent("agent-box-\(agent.rawValue).txt"),
+                           atomically: true, encoding: .utf8)
         }
         if tab.sessionId == nil, tick % 3 == 0 {
             let taken = Set(tabs.compactMap(\.sessionId))
-            let since = tab.startedAt.addingTimeInterval(-2)
+            let since = tab.conversationResetAt ?? tab.startedAt.addingTimeInterval(-2)
             let cwd = tab.cwd
             if let id = Bounded.run(timeout: 0.3, fallback: nil, {
                 AgentSessions.discover(agent, cwd: cwd, since: since, excluding: taken)
             }) {
                 tab.sessionId = id
                 tab.continueLatest = false
+                tab.conversationResetAt = nil
                 scheduleSave()
             }
         }
@@ -791,6 +814,7 @@ final class DeckStore: ObservableObject {
                         guard let tab = self.tabs.first(where: { $0.id == result.tab }),
                               tab.sessionId == result.session, result.info != tab.transcript else { continue }
                         tab.transcript = result.info
+                        self.learnTier(tab, from: result.info)
                         if let at = result.info.lastUserAt, at > tab.lastActive {
                             tab.lastActive = at
                             resort = true
@@ -846,6 +870,7 @@ final class DeckStore: ObservableObject {
                    tab.status == .idle, Date().timeIntervalSince(tab.startedAt) > 6 {
                     Self.testTyped = true
                     tab.terminal.insert(typed.replacingOccurrences(of: "\\n", with: "\n"), submit: false)
+                    testReturn(tab)
                 }
             }
             if let pending = tab.pendingDraft {
@@ -890,9 +915,137 @@ final class DeckStore: ObservableObject {
         guard !text.isEmpty else { return } // you sent or cleared it yourself
         // The turn stopped without finishing (an API error, the Mac slept, you pressed Esc): keep the draft unsent.
         guard !DraftReader.turnFailed(tab.terminal.getTerminal()) else { NSSound.beep(); return }
+        if routeMessage(tab) { return } // the router restarted Claude on another model with the draft
         tab.terminal.send(txt: "\r")
         tab.draft = nil
         tab.lastActive = Date()
+    }
+
+    // MARK: Model router
+
+    /// Return was pressed in `tab`'s terminal. True when the model router took the message over.
+    func returnPressed(_ tab: SessionTab) -> Bool {
+        // Codex and Antigravity keep running under a new conversation after "/new" or "/clear", and only their
+        // files say which. Forget the old one now, or a restart would resume it and send your next message there.
+        if let agent = tab.agent, agent != .claude, tab.status == .idle, tab.sessionId != nil, tab.terminal.atBottom,
+           let typed = InputBox.read(agent, tab.terminal.getTerminal())?.lowercased(), typed == "/new" || typed == "/clear" {
+            tab.sessionId = nil
+            tab.conversationResetAt = Date()
+            scheduleSave()
+        }
+        return routeMessage(tab)
+    }
+
+    /// Test hook (TABWISE_TEST_RETURN): press Return on what a test just typed, the way the key does ("key": as
+    /// a key event through the window, so the terminal's own key handling is part of the test).
+    private func testReturn(_ tab: SessionTab) {
+        guard let mode = ProcessInfo.processInfo.environment["TABWISE_TEST_RETURN"] else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, tab.status == .idle else { return }
+            if mode == "key", let window = tab.terminal.window {
+                window.makeFirstResponder(tab.terminal)
+                let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                             charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)
+                self.routerLog("test return: key event posted=\(event != nil)")
+                if let event { NSApp.postEvent(event, atStart: false) }
+                return
+            }
+            let routed = self.routeMessage(tab)
+            self.routerLog("test return: routed=\(routed)")
+            if !routed { tab.terminal.send(txt: "\r") }
+        }
+    }
+
+    private func routerLog(_ text: String) {
+        guard Self.debugDrafts else { return }
+        let url = Self.stateURL.deletingLastPathComponent().appendingPathComponent("router-debug.txt")
+        let line = "\(Date()) \(text)\n"
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+    }
+
+    /// Return was pressed in `tab`'s message box (or Send When Done is about to press it). The router reads
+    /// the message off the screen and judges the job. When another model should take it, the agent is
+    /// restarted on that model, resuming the conversation, with the message handed over as it starts; then
+    /// this returns true and the Return must not reach the agent. False: send it as usual.
+    func routeMessage(_ tab: SessionTab) -> Bool {
+        guard Router.routes(model: tab.modelPick, effort: tab.effortPick), !tab.archived, let agent = tab.agent,
+              tab.status == .idle, tab.claudePid != nil, tab.pendingDraft == nil, tab.firstPrompt == nil,
+              tab.terminal.atBottom, // scrolled back, the screen may show an earlier message box
+              let text = InputBox.read(agent, tab.terminal.getTerminal()), !text.isEmpty,
+              InputBox.resendable(text), InputBox.showsAll(agent, tab.terminal.getTerminal()) else { return false }
+        // Whether there's a conversation to carry over. Unknown (the disk is slow, or a Codex / Antigravity tab
+        // that picked up the folder's latest conversation and hasn't shown which): leave the tab alone.
+        let fresh: Bool
+        if agent == .claude, let id = tab.sessionId {
+            guard let exists = Bounded.run(timeout: 0.3, fallback: Bool?.none, { Registry.transcriptExists(id) }) else { return false }
+            fresh = !exists
+        } else if agent == .claude {
+            fresh = true
+        } else {
+            guard tab.sessionId != nil || (!tab.continueLatest && tab.conversationResetAt == nil) else { return false }
+            fresh = tab.sessionId == nil
+        }
+        let verdict = Router.classify(text, agent: agent)
+        routerLog("\(agent.name) [\(text.prefix(80))] verdict=\(verdict.tier.rawValue) followUp=\(verdict.followUp) explicit=\(verdict.explicit) (\(verdict.reason)) fresh=\(fresh) current=\(tab.tier?.rawValue ?? "-") tokens=\(tab.transcript.contextTokens ?? -1)")
+        let info = tab.transcript
+        // With the model set by you, a tier changes only the effort, and any conversation fits.
+        let modelMoves = tab.modelPick == .auto && Router.routeModel
+        let situation = Router.Situation(current: tab.tier, fresh: fresh, lastActivity: fresh ? nil : info.lastReplyAt,
+                                         contextTokens: fresh ? nil : info.contextTokens,
+                                         roomy: Set(Tier.allCases.filter { !modelMoves || Router.holdsAnything(agent, $0) }))
+        guard let target = Router.decide(verdict, situation) else { return false }
+        let note = "\(target.name) job: \(verdict.reason)"
+        // Nothing to restart for when both tiers run on the same model and effort.
+        guard Router.flags(agent, tier: target, model: tab.modelPick, effort: tab.effortPick)
+                != Router.flags(agent, tier: tab.tier, model: tab.modelPick, effort: tab.effortPick) else {
+            tab.tier = target
+            tab.routeNote = note
+            scheduleSave()
+            return false
+        }
+        tab.reroute(to: target, sending: text, note: note)
+        scheduleSave()
+        return true
+    }
+
+    /// Your choice for one session (tab menu → Model / Effort): automatic, the agent's own setting, or a model
+    /// or effort you name. A running agent restarts on it, resuming the conversation, once it isn't in the
+    /// middle of a turn.
+    func setPicks(_ tab: SessionTab, model: Pick? = nil, effort: Pick? = nil) {
+        guard let agent = tab.agent else { return }
+        let before = Router.flags(agent, tier: tab.tier, model: tab.modelPick, effort: tab.effortPick)
+        if let model { tab.modelPick = model }
+        if let effort { tab.effortPick = effort }
+        // Back on automatic with no tier yet: start from the everyday one, as a new session does.
+        if tab.tier == nil, Router.routes(model: tab.modelPick, effort: tab.effortPick) { tab.tier = .everyday }
+        tab.routeNote = nil
+        scheduleSave()
+        objectWillChange.send()
+        let after = Router.flags(agent, tier: tab.tier, model: tab.modelPick, effort: tab.effortPick)
+        guard before != after, !tab.archived, tab.claudePid != nil else { return }
+        if tab.status == .idle { tab.reroute(to: tab.tier, sending: nil, note: nil) } else { tab.rerouteWhenIdle = true }
+    }
+
+    /// The router was turned on or off, or its tiers changed (Settings, or "Automatic" in a session's menu):
+    /// learn what the open sessions run on, so the next message is judged against it.
+    func routerChanged() {
+        for tab in liveTabs { learnTier(tab, from: tab.transcript) }
+        objectWillChange.send()
+    }
+
+    /// The tier a tab is really on, from the model its last reply was written with: tabs the router didn't
+    /// start, and ones where you changed the model inside the agent yourself.
+    private func learnTier(_ tab: SessionTab, from info: TranscriptInfo) {
+        guard Router.routes(model: tab.modelPick, effort: tab.effortPick), let agent = tab.agent, let model = info.model,
+              let at = info.lastReplyAt, at > tab.startedAt, // a reply from before this start says nothing about now
+              let actual = Router.tier(agent, model: model, effort: info.effort,
+                                       byModel: Router.routeModel && tab.modelPick == .auto,
+                                       byEffort: Router.routeEffort && tab.effortPick == .auto),
+              actual != tab.tier else { return }
+        tab.tier = actual
+        scheduleSave()
     }
 
     var totalMemory: UInt64 { liveTabs.reduce(0) { $0 + $1.memory } }

@@ -55,6 +55,12 @@ struct SavedTab: Codable {
     var draft: String?
     /// The session was running when last saved; started again on the next launch.
     var running: Bool?
+    /// The tier the model router has the tab on ("simple" / "everyday" / "complex"; nil: none yet).
+    var tier: String?
+    /// The model and effort you set for this session yourself: a name, "-" for the agent's own setting, nil
+    /// for automatic (the router's choice where it's on).
+    var model: String?
+    var effort: String?
 }
 
 @MainActor
@@ -73,6 +79,20 @@ final class SessionTab: ObservableObject, Identifiable {
     @Published var archived = false
     @Published var lastActive = Date()
     var extraArgs: [String] = []
+    /// This session's model and effort: automatic, the agent's own, or what you set (tab menu → Model / Effort).
+    @Published var modelPick = Pick.auto
+    @Published var effortPick = Pick.auto
+    /// The tier the model router has the tab on; nil while nothing was chosen for it yet.
+    @Published var tier: Tier?
+    /// Why the router chose that tier (sidebar tooltip).
+    @Published var routeNote: String?
+    /// A message handed to the agent as it starts: the router restarted it on another model to send this.
+    var firstPrompt: String?
+    /// You changed the tab's model while the agent was working: restart on it once the turn ends.
+    var rerouteWhenIdle = false
+    /// Codex / Antigravity were told to start a new conversation ("/new", "/clear") at this time. Which one the
+    /// tab is in shows only once they write it, so until then the tab has no conversation to resume.
+    var conversationResetAt: Date?
 
     @Published var status: TabStatus = .starting
     @Published var registryName: String?
@@ -123,7 +143,14 @@ final class SessionTab: ObservableObject, Identifiable {
             guard let self else { return false }
             return [.idle, .working, .waiting].contains(self.status) || (self.isAgent && self.status == .starting)
         }
+        terminal.routeReturn = { [weak self] in
+            guard let self else { return false }
+            return Self.onReturn?(self) ?? false
+        }
     }
+
+    /// Return pressed in a tab's terminal; the store's model router answers whether it took the message over.
+    static var onReturn: ((SessionTab) -> Bool)?
 
     convenience init(saved: SavedTab) {
         self.init(id: saved.id, agent: saved.agent ?? (saved.isClaude ? .claude : nil), sessionId: saved.sessionId,
@@ -136,6 +163,9 @@ final class SessionTab: ObservableObject, Identifiable {
         draft = saved.draft
         pendingDraft = saved.draft
         wasRunning = saved.running ?? false
+        tier = saved.tier.flatMap(Tier.init(rawValue:))
+        modelPick = Pick(saved: saved.model)
+        effortPick = Pick(saved: saved.effort)
         if archived { status = .archived }
     }
 
@@ -143,7 +173,8 @@ final class SessionTab: ObservableObject, Identifiable {
         SavedTab(id: id, isClaude: isClaude, agent: isClaude ? nil : agent, sessionId: sessionId, cwd: cwd, customName: customName, group: group,
                  title: displayName, color: color, pinned: pinned ? true : nil, archived: archived ? true : nil,
                  lastActive: lastActive, extraArgs: extraArgs.isEmpty ? nil : extraArgs, draft: draft,
-                 running: status.isActive || status == .shell ? true : nil)
+                 running: status.isActive || status == .shell ? true : nil, tier: tier?.rawValue,
+                 model: modelPick.saved, effort: effortPick.saved)
     }
 
     var displayName: String {
@@ -164,8 +195,13 @@ final class SessionTab: ObservableObject, Identifiable {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         var command = "exec \(shell) -l"
         var extraEnv: [String: String] = [:]
+        let routed = routedFlags
+        let prompt = firstPrompt
+        firstPrompt = nil
         if isClaude {
-            let flags = extraArgs.isEmpty ? DeckSettings.defaultArgs : extraArgs
+            var flags = extraArgs.isEmpty ? DeckSettings.defaultArgs : extraArgs
+            // The router's model and effort replace the ones in the tab's own flags.
+            if let routed { flags = Self.dropping(routed.filter { $0.hasPrefix("--") }, from: flags) + routed }
             var parts = ["claude"] + flags.map(ResumeCommand.shellQuote)
             if DeckSettings.builtInStatusLine, let script = DeckSettings.statusLineScript,
                let json = try? JSONSerialization.data(withJSONObject: [
@@ -177,11 +213,14 @@ final class SessionTab: ObservableObject, Identifiable {
             for path in Mods.toLoad() { parts += ["--plugin-dir", ResumeCommand.shellQuote(path)] }
             // Resume only if there's something to resume; an empty session starts fresh instead.
             if let sessionId, Registry.transcriptExists(sessionId) { parts += ["--resume", ResumeCommand.shellQuote(sessionId)] }
+            if let prompt { parts += ["--", ResumeCommand.shellQuote(prompt)] }
             let claude = parts.joined(separator: " ")
             // Drop into a shell when claude exits so the tab stays usable.
             command = "\(claude); \(command)"
         } else if let agent {
             var start = agent.startCommand(sessionId: sessionId, cwd: cwd, continueLatest: continueLatest)
+            if let routed, !routed.isEmpty { start += " " + routed.map(ResumeCommand.shellQuote).joined(separator: " ") }
+            if let extra = ProcessInfo.processInfo.environment["TABWISE_TEST_\(agent.rawValue.uppercased())_ARGS"] { start += " " + extra } // test hook
             // Claude's MCP servers for this folder (~/.claude.json is local; .mcp.json is read bounded).
             let servers = MCPShare.enabled ? MCPShare.claudeServers(cwd: cwd) : []
             if agent == .codex, !servers.isEmpty {
@@ -191,6 +230,9 @@ final class SessionTab: ObservableObject, Identifiable {
             } else if agent == .antigravity {
                 MCPShare.syncAntigravity(servers)
             }
+            if let prompt {
+                start += (agent == .codex ? " -- " : " --prompt-interactive ") + ResumeCommand.shellQuote(prompt)
+            }
             command = "\(start); \(command)"
         }
         startedAt = Date()
@@ -199,6 +241,43 @@ final class SessionTab: ObservableObject, Identifiable {
                               environment: Self.environment(extraEnv), execName: "-" + (shell as NSString).lastPathComponent,
                               currentDirectory: cwd)
         shellPid = terminal.process.shellPid
+    }
+
+    /// The launch flags for this session's model and effort (yours, or the router's); nil for a shell.
+    private var routedFlags: [String]? {
+        agent.map { Router.flags($0, tier: tier, model: modelPick, effort: effortPick) }
+    }
+
+    /// `flags` without the named ones and their values ("--model opus", "--model=opus").
+    static func dropping(_ names: [String], from flags: [String]) -> [String] {
+        var out: [String] = []
+        var skipValue = false
+        for flag in flags {
+            if skipValue { skipValue = false; if !flag.hasPrefix("-") { continue } }
+            if names.contains(flag) { skipValue = true; continue }
+            if names.contains(where: { flag.hasPrefix($0 + "=") }) { continue }
+            out.append(flag)
+        }
+        return out
+    }
+
+    /// Model router: restart the agent on `tier`, resuming the conversation. With `prompt`, hand it that message
+    /// as it starts; without, what's typed in the input box is typed back as after any restart.
+    func reroute(to tier: Tier?, sending prompt: String?, note: String?) {
+        self.tier = tier
+        routeNote = note
+        rerouteWhenIdle = false
+        if let prompt {
+            firstPrompt = prompt
+            draft = nil
+            pendingDraft = nil
+            lastActive = Date()
+        } else {
+            stashDraft()
+        }
+        terminate()
+        terminal.getTerminal().resetToInitialState()
+        start()
     }
 
     /// Stops the session to free memory; the tab stays and resumes where it was when opened again.
