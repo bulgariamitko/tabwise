@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.21
+
+- Model router (off by default; turn it on in Settings → Model Router, or choose Automatic in a session's Model or Effort menu): Tabwise judges each message you send and puts the job on the model that fits it — a light model for questions and chores, your everyday model for normal work, the strongest one for design and hard bugs. It works for Claude, Codex and Antigravity; you choose the model and effort for each level, and automatic model and automatic effort can be turned on separately
+- Each session can have its own model and effort: right-click it → Model or Effort. Set them by hand for one session and leave the others automatic; this works with the router off too. You can also write "use Fable" or "use a cheaper model" in a message
+- Codex and Antigravity: restarting a tab after "/new" or "/clear" no longer brings back the conversation from before it
+
 ## 0.1.20
 
 - Right-click a folder in Finder for "New Tabwise Session Here" or "Continue Tabwise Session Here" (under Quick Actions or Services)
