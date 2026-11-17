@@ -109,8 +109,14 @@ PLIST
 if [ "${SKIP_SIGN:-}" != "1" ]; then
   SIGN_ID="${SIGN_ID:-$(security find-identity -p codesigning -v | awk -F'"' '/Developer ID Application/{print $2; exit}')}"
   SIGN_ID="${SIGN_ID:-$(security find-identity -p codesigning -v | awk -F'"' '/Apple Development/{print $2; exit}')}"
-  xattr -cr "$APP"   # Dropbox tags files in this folder; codesign rejects extended attributes
-  codesign --force --deep -s "${SIGN_ID:--}" "$APP"
+  # Dropbox tags files in this folder and codesign rejects extended attributes. Dropbox can tag one again
+  # between the two commands, so try a few times.
+  for attempt in 1 2 3 4; do
+    xattr -cr "$APP"
+    codesign --force --deep -s "${SIGN_ID:--}" "$APP" && break
+    [ "$attempt" = 4 ] && exit 1
+    sleep 1
+  done
   echo "Signed with: ${SIGN_ID:-ad-hoc}"
 fi
 echo "Built $APP ($VERSION, build $BUILD_NUMBER)"
