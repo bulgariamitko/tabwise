@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.22
+
+- Click a session ID shown in a terminal (for example in `claude --resume <id>`, `codex resume <id>` or `agy --conversation <id>`) to resume that session in its own folder, or to switch to its tab when it's already open. Works for Claude Code, Codex and Antigravity; the pointer turns into a hand over IDs Tabwise knows
+
 ## 0.1.21
 
 - Model router (off by default; turn it on in Settings → Model Router, or choose Automatic in a session's Model or Effort menu): Tabwise judges each message you send and puts the job on the model that fits it — a light model for questions and chores, your everyday model for normal work, the strongest one for design and hard bugs. It works for Claude, Codex and Antigravity; you choose the model and effort for each level, and automatic model and automatic effort can be turned on separately

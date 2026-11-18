@@ -235,6 +235,8 @@ final class DeckStore: ObservableObject {
 
     func launch() {
         SessionTab.onReturn = { [weak self] tab in self?.returnPressed(tab) ?? false }
+        DropTerminalView.knowsSession = { [weak self] id in self?.sessionLink(id) != nil }
+        DropTerminalView.openSession = { [weak self] id in self?.openSessionLink(id) }
         let restored = load()
         if let data = try? Data(contentsOf: Self.closedURL),
            let closed = try? Self.decoder.decode([SavedTab].self, from: data) {
@@ -508,6 +510,58 @@ final class DeckStore: ObservableObject {
 
     func openTab(for sessionId: String) -> SessionTab? { tabs.first { $0.sessionId == sessionId } }
 
+    /// What a session ID shown in a terminal leads to: a tab that has it, a Claude Code transcript, or a Codex or
+    /// Antigravity conversation and the folder it belongs to.
+    enum SessionLink { case tab(SessionTab), transcript(URL), agent(Agent, cwd: String) }
+
+    /// Sessions found by ID, and IDs with none (asked again after a while: the session may be one that is just
+    /// starting). Looked up on every pointer move over an ID, so remembered.
+    private var foundLinks: [String: SessionLink] = [:]
+    private var linkMisses: [String: Date] = [:]
+
+    func sessionLink(_ id: String) -> SessionLink? {
+        if let tab = openTab(for: id) { return .tab(tab) }
+        if let known = foundLinks[id] { return known }
+        if let missed = linkMisses[id], Date().timeIntervalSince(missed) < 30 { return nil }
+        var found: SessionLink?
+        if let item = history.items.first(where: { $0.id == id }) {
+            found = .transcript(URL(fileURLWithPath: item.path))
+        } else {
+            let dirs = (try? FileManager.default.contentsOfDirectory(at: Registry.projectsDir, includingPropertiesForKeys: nil)) ?? []
+            if let url = dirs.lazy.map({ $0.appendingPathComponent(id + ".jsonl") })
+                .first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                found = .transcript(url)
+            } else if let (agent, cwd) = AgentSessions.locate(id) {
+                found = .agent(agent, cwd: cwd)
+            }
+        }
+        guard let found else { linkMisses[id] = Date(); return nil }
+        foundLinks[id] = found
+        return found
+    }
+
+    /// A session ID clicked in a terminal: switch to its tab, or resume it in its own folder.
+    func openSessionLink(_ id: String) {
+        switch sessionLink(id) {
+        case .tab(let tab)?:
+            sidebarMode = .open
+            if tab.archived { unarchive(tab) } else { selectedID = tab.id }
+        case .transcript(let url)?:
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            guard let item = HistoryScanner.read(url, mtime: attrs?[.modificationDate] as? Date ?? Date(),
+                                                  size: (attrs?[.size] as? Int) ?? 0) else { NSSound.beep(); return }
+            resumeHistory(item)
+        case .agent(let agent, let cwd)?:
+            guard Bounded.exists(cwd) else { NSSound.beep(); return }
+            sidebarMode = .open
+            let tab = SessionTab(agent: agent, sessionId: id, cwd: cwd)
+            if let name = history.name(id) { tab.customName = name }
+            add(tab, select: true)
+        case nil:
+            NSSound.beep()
+        }
+    }
+
     /// Resume a past session as a tab (or jump to it if it's already open) and switch back to Open.
     func resumeHistory(_ item: HistoryItem) {
         guard let cwd = item.cwd, Bounded.exists(cwd) else { NSSound.beep(); return }
@@ -670,7 +724,52 @@ final class DeckStore: ObservableObject {
 
     // MARK: Status polling
 
+    private static var testLinked = false
+
+    /// Test hook: TABWISE_TEST_LINK=<id> prints the ID into the selected tab's screen, double-clicks it (SwiftTerm
+    /// selects the word it thinks is there, which checks the geometry), then clicks it once.
+    private func testLink() {
+        guard !Self.testLinked, let id = ProcessInfo.processInfo.environment["TABWISE_TEST_LINK"],
+              let tab = selected, Date().timeIntervalSince(tab.startedAt) > 3, let window = tab.terminal.window else { return }
+        Self.testLinked = true
+        let view = tab.terminal
+        view.feed(text: "\r\n  resume:  cd x && claude --resume \(id)\r\n")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let t = view.getTerminal()
+            var log = ""
+            for row in 0..<t.rows {
+                guard let text = t.getLine(row: row)?.translateToString(trimRight: true),
+                      let r = text.range(of: id) else { continue }
+                let col = text.distance(from: text.startIndex, to: r.lowerBound) + 10
+                let cellH = view.getOptimalFrameSize().height / CGFloat(t.rows)
+                let scale = window.backingScaleFactor
+                let cellW = (view.font.advancement(forGlyph: view.font.glyph(withName: "W")).width * scale).rounded() / scale
+                let local = NSPoint(x: (CGFloat(col) + 0.5) * cellW, y: view.frame.height - (CGFloat(row) + 0.5) * cellH)
+                let inWindow = view.convert(local, to: nil)
+                func event(_ type: NSEvent.EventType, _ clicks: Int) -> NSEvent {
+                    NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+                }
+                view.mouseDown(with: event(.leftMouseDown, 2))
+                log += "row \(row) col \(col) sessionId(at:) = \(view.sessionId(at: local) ?? "nil")\n"
+                log += "double-click selected: [\(view.getSelection() ?? "nil")]\n"
+                view.mouseUp(with: event(.leftMouseUp, 2))
+                view.selectNone()
+                // The single click: should resume the session in a new tab.
+                view.mouseDown(with: event(.leftMouseDown, 1)); view.mouseUp(with: event(.leftMouseUp, 1))
+                break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                log += "tabs: " + (self?.tabs.map { "\($0.sessionId ?? "-")@\($0.cwd)" }.joined(separator: ", ") ?? "") + "\n"
+                log += "selected: \(self?.selected?.sessionId ?? "-")\n"
+                try? log.write(to: Self.stateURL.deletingLastPathComponent().appendingPathComponent("link-test.txt"),
+                               atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
     private func poll() {
+        testLink()
         let entries = Registry.running()
         let appActive = NSApp.isActive
         var statusChanged = false

@@ -50,6 +50,93 @@ final class DropTerminalView: LocalProcessTerminalView {
         return terminal.routeReturn() ? nil : event
     }
 
+    // MARK: Session IDs as links
+
+    /// Set by the store: whether a session ID belongs to a session Tabwise can open, and opening it.
+    static var knowsSession: (String) -> Bool = { _ in false }
+    static var openSession: (String) -> Void = { _ in }
+
+    private static let sessionIdPattern = try! NSRegularExpression(
+        pattern: "(?<![0-9A-Fa-f-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9A-Fa-f-])")
+
+    /// The width and height of one character cell. SwiftTerm keeps its own private; the optimal frame is
+    /// exactly that cell size times the grid (plus the scroller on the width, so the width comes from the font).
+    private var cellSize: CGSize? {
+        let t = getTerminal()
+        guard t.rows > 0, t.cols > 0 else { return nil }
+        let height = getOptimalFrameSize().height / CGFloat(t.rows)
+        // As SwiftTerm measures it: the advance of "W", snapped to the pixel grid.
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let width = (font.advancement(forGlyph: font.glyph(withName: "W")).width * scale).rounded() / scale
+        return height > 0 && width > 0 ? CGSize(width: width, height: height) : nil
+    }
+
+    /// The known session ID under a point in the view, if there is one.
+    func sessionId(at point: NSPoint) -> String? {
+        guard let cell = cellSize else { return nil }
+        let t = getTerminal()
+        let row = Int((frame.height - point.y) / cell.height)
+        let col = Int(point.x / cell.width)
+        guard row >= 0, row < t.rows, let line = t.getLine(row: row) else { return nil }
+        let text = line.translateToString(trimRight: true)
+        let ns = text as NSString
+        for match in Self.sessionIdPattern.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            // Columns before the ID: count characters, so wide ones before it would only shift it a little.
+            let start = (ns.substring(to: match.range.location) as String).count
+            guard col >= start - 1, col <= start + match.range.length else { continue }
+            let id = ns.substring(with: match.range)
+            return Self.knowsSession(id) ? id : nil
+        }
+        return nil
+    }
+
+    private var clickStart: NSPoint?
+    private var linkTracking: NSTrackingArea?
+    private var pointing = false
+
+    override func mouseDown(with event: NSEvent) {
+        let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        clickStart = plain && event.clickCount == 1 ? convert(event.locationInWindow, from: nil) : nil
+        super.mouseDown(with: event)
+    }
+
+    /// A plain click (not a drag or a double-click) on a session ID resumes that session in a tab, or switches
+    /// to its tab when it's already open.
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        defer { clickStart = nil }
+        guard let start = clickStart, hypot(point.x - start.x, point.y - start.y) < 4, !selectionActive,
+              let id = sessionId(at: point) else { return }
+        Self.openSession(id)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let linkTracking { removeTrackingArea(linkTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: hoverOwner, userInfo: nil)
+        addTrackingArea(area)
+        linkTracking = area
+    }
+
+    /// The pointing hand over a session ID. SwiftTerm's own mouseMoved can't be overridden, so a separate
+    /// tracking area reports the pointer here.
+    private lazy var hoverOwner = HoverOwner { [weak self] event, inside in
+        guard let self else { return }
+        let over = inside && self.sessionId(at: self.convert(event.locationInWindow, from: nil)) != nil
+        if over { NSCursor.pointingHand.set() } else if self.pointing { NSCursor.iBeam.set() }
+        self.pointing = over
+    }
+
+    final class HoverOwner: NSResponder {
+        let moved: (NSEvent, Bool) -> Void
+        init(_ moved: @escaping (NSEvent, Bool) -> Void) { self.moved = moved; super.init() }
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+        override func mouseMoved(with event: NSEvent) { moved(event, true) }
+        override func mouseExited(with event: NSEvent) { moved(event, false) }
+    }
+
     /// The view shows the live bottom of the terminal, not an earlier part you scrolled back to.
     var atBottom: Bool { !canScroll || scrollPosition >= 1 }
 

@@ -24,6 +24,7 @@ in a sidebar with live status, and nothing is lost when you quit, restart, or mo
 
 **History**
 - **All Sessions** lists every past conversation on your Mac with its title, folder and last message — with pins, full-text search (Latin and Cyrillic), and one-click resume.
+- **Click a session ID to resume it**: when a terminal shows a Claude Code, Codex or Antigravity session ID (say, in a `claude --resume <id>` line), click it to open that session in a tab, in its own folder, or to switch to its tab if it's already open.
 
 **Never lose work**
 - Tabs and their order, names, pins, notes and colors are restored after quitting or restarting; background tabs start only when you open them, so launch is fast.

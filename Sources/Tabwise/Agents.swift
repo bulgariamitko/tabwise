@@ -145,6 +145,13 @@ enum AgentSessions {
         }
     }
 
+    /// A Codex or Antigravity conversation with this ID, and the folder it was started in.
+    static func locate(_ id: String) -> (Agent, cwd: String)? {
+        if let url = file(.codex, sessionId: id, cwd: ""), let meta = codexMeta(url) { return (.codex, meta.cwd) }
+        if file(.antigravity, sessionId: id, cwd: "") != nil, let cwd = agyFolder(id) { return (.antigravity, cwd) }
+        return nil
+    }
+
     /// The conversation an agent started in `cwd` since `since` (or resumed: its file was written since then),
     /// leaving out ones other tabs already own. Newest first.
     static func discover(_ agent: Agent, cwd: String, since: Date, excluding taken: Set<String>) -> String? {
@@ -320,6 +327,20 @@ enum AgentSessions {
         guard let data = try? Data(contentsOf: agyData.appendingPathComponent("cache/last_conversations.json")),
               let map = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
         return map[cwd] ?? map[canonical(cwd)]
+    }
+
+    /// The folder an Antigravity conversation belongs to: its workspace in cache/conversation_metadata.json, else
+    /// the folder whose latest conversation it is.
+    private static func agyFolder(_ id: String) -> String? {
+        if let data = try? Data(contentsOf: agyData.appendingPathComponent("cache/conversation_metadata.json")),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let summary = ((obj["conversations"] as? [String: Any])?[id] as? [String: Any])?["summary"] as? [String: Any],
+           let uri = (summary["WorkspaceURIs"] as? [String])?.first, let url = URL(string: uri), url.isFileURL {
+            return url.path
+        }
+        guard let data = try? Data(contentsOf: agyData.appendingPathComponent("cache/last_conversations.json")),
+              let map = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
+        return map.first { $0.value == id }?.key
     }
 
     /// The conversation's title or summary, once Antigravity has written one (cache/conversation_metadata.json).
