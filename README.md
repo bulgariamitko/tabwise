@@ -16,6 +16,7 @@ in a sidebar with live status, and nothing is lost when you quit, restart, or mo
 - Pin, rename, color-label, add notes, archive, or **put a tab to sleep** to free its memory (it resumes where it was when you open it).
 - **Import** the sessions you already have running in Terminal, or **resume** any session by pasting `claude --resume <id>` (flags are kept).
 - **Split view**, <kbd>⌘K</kbd> quick switcher, menu bar icon with live counts.
+- **Queue messages while the agent works** (Claude Code, Codex, Antigravity): type a message and press <kbd>⌘↩</kbd>, and it waits for the current turn to finish instead of cutting in. Press it again for each new message to stack as many as you like; they go out one by one, each after the previous reply. Click "N queued" on the tab to edit, reorder or remove them before they're sent.
 
 **Model router** (off by default; Settings → Model Router)
 - Tabwise reads the message you send and **puts the job on the model that fits it**: a light model for questions and chores, your everyday model for normal work, the strongest one for design, hard bugs and big changes. It works the same way for Claude Code, Codex and Antigravity, and you choose the model and effort for each level.

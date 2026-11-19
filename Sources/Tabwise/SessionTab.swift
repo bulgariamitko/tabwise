@@ -53,6 +53,8 @@ struct SavedTab: Codable {
     var extraArgs: [String]?
     /// Unsent text in Claude's input box, typed back after a restart.
     var draft: String?
+    /// Messages stacked with ⌘↩, sent one by one as Claude finishes each turn (paused after a restart).
+    var queued: [String]?
     /// The session was running when last saved; started again on the next launch.
     var running: Bool?
     /// The tier the model router has the tab on ("simple" / "everyday" / "complex"; nil: none yet).
@@ -111,6 +113,14 @@ final class SessionTab: ObservableObject, Identifiable {
     @Published var draft: String?
     /// You approved the draft: press Return for you as soon as Claude finishes its turn.
     @Published var sendWhenDone = false
+    /// Messages lifted out of the input box with ⌘↩, typed in and sent one per turn, oldest first.
+    @Published var queued: [String] = []
+    /// The queue waits for you: the last turn failed, the Mac slept mid-turn, or the app restarted. ⌘↩ resumes.
+    @Published var queuePaused = false
+    /// When the last queued message went out; the next one waits until Claude has worked on it.
+    var queueSentAt: Date?
+    /// The queue is open for editing: hold it until the window closes.
+    var queueEditing = false
     /// A draft saved last time, waiting to be typed back once Claude is ready.
     var pendingDraft: String?
     /// Was running when the app last quit (see SavedTab.running).
@@ -162,6 +172,8 @@ final class SessionTab: ObservableObject, Identifiable {
         extraArgs = saved.extraArgs ?? []
         draft = saved.draft
         pendingDraft = saved.draft
+        queued = saved.queued ?? []
+        queuePaused = !queued.isEmpty
         wasRunning = saved.running ?? false
         tier = saved.tier.flatMap(Tier.init(rawValue:))
         modelPick = Pick(saved: saved.model)
@@ -173,6 +185,7 @@ final class SessionTab: ObservableObject, Identifiable {
         SavedTab(id: id, isClaude: isClaude, agent: isClaude ? nil : agent, sessionId: sessionId, cwd: cwd, customName: customName, group: group,
                  title: displayName, color: color, pinned: pinned ? true : nil, archived: archived ? true : nil,
                  lastActive: lastActive, extraArgs: extraArgs.isEmpty ? nil : extraArgs, draft: draft,
+                 queued: queued.isEmpty ? nil : queued,
                  running: status.isActive || status == .shell ? true : nil, tier: tier?.rawValue,
                  model: modelPick.saved, effort: effortPick.saved)
     }

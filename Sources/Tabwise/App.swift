@@ -474,8 +474,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(sendWhenDone(_:)) {
-            item.title = store.selected?.sendWhenDone == true ? "Cancel Send When Done" : "Send Draft When Claude Finishes"
-            return store.selected?.isClaude == true
+            let tab = store.selected
+            item.title = tab?.sendWhenDone == true ? "Cancel Send When Done"
+                : tab?.queued.isEmpty == false ? "Queue Message (\(tab!.queued.count) Waiting)"
+                : "Send Draft When \(tab?.agent?.name ?? "Claude") Finishes"
+            return tab?.agent != nil && tab?.archived == false
         }
         if item.action == #selector(toggleSplit(_:)) {
             item.title = store.splitID == nil ? "Split View with Next Tab" : "Close Split View"

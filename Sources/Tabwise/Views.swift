@@ -326,9 +326,16 @@ struct Sidebar: View {
             .keyboardShortcut("t", modifiers: [.command, .option])
         Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: tab.cwd) }
             .keyboardShortcut("r", modifiers: [.command, .option])
-        if tab.isClaude && !tab.archived {
-            Button(tab.sendWhenDone ? "Cancel Send When Done" : "Send Draft When Claude Finishes") { store.toggleSendWhenDone(tab) }
-                .keyboardShortcut(.return, modifiers: .command)
+        if let agent = tab.agent, !tab.archived {
+            Button(tab.sendWhenDone ? "Cancel Send When Done"
+                   : tab.queued.isEmpty ? "Send Draft When \(agent.name) Finishes" : "Queue Message (\(tab.queued.count) Waiting)") {
+                store.toggleSendWhenDone(tab)
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            if !tab.queued.isEmpty {
+                Button("Edit Queued Messages…") { store.editQueue(tab) }
+                Button("Clear \(tab.queued.count) Queued Message\(tab.queued.count == 1 ? "" : "s")") { store.clearQueue(tab) }
+            }
         }
         if let id = tab.sessionId {
             Button("Copy Session ID") { AppActions.copySessionID(tab) }
@@ -635,7 +642,7 @@ struct TabMeta: View {
         let routed = tab.archived ? nil : tab.agent.flatMap {
             Router.label($0, tier: tab.tier, model: tab.modelPick, effort: tab.effortPick)
         }
-        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone || routed != nil {
+        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone || !tab.queued.isEmpty || routed != nil {
             HStack(spacing: 10) {
                 if let routed {
                     let automatic = tab.modelPick == .auto && tab.effortPick == .auto
@@ -645,10 +652,21 @@ struct TabMeta: View {
                               + (tab.routeNote.map { "\n\($0)" } ?? "")
                               + "\nRight-click the tab → Model or Effort to change it.")
                 }
+                if !tab.queued.isEmpty {
+                    let list = tab.queued.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+                    Label("\(tab.queued.count) queued" + (tab.queuePaused ? ", paused" : ""), systemImage: "tray.full")
+                        .foregroundStyle(tab.queuePaused ? Color.orange.opacity(0.9) : Color.green.opacity(0.9))
+                        .help((tab.queuePaused
+                               ? "Paused: the last turn didn't finish, or Tabwise restarted. ⌘↩ on an empty input box resumes.\n\n"
+                               : "Sent one by one as \(tab.agent?.name ?? "the agent") finishes each turn.\n\n")
+                              + list + "\n\nClick to edit, reorder or remove them. ⌘↩ on an empty input box takes the last one back.")
+                        .contentShape(Rectangle())
+                        .onTapGesture { DeckStore.current?.editQueue(tab) }
+                }
                 if tab.sendWhenDone {
                     Label("Sends when done", systemImage: "paperplane")
                         .foregroundStyle(.green.opacity(0.9))
-                        .help("Your draft is sent as soon as Claude finishes. ⌘↩ again to cancel.\n\(tab.draft ?? "")")
+                        .help("Your draft is sent as soon as \(tab.agent?.name ?? "the agent") finishes. ⌘↩ again to cancel.\n\(tab.draft ?? "")")
                 } else if let draft = tab.draft {
                     Label("Draft", systemImage: "pencil.line")
                         .foregroundStyle(.yellow.opacity(0.9))

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.23
+
+- Send When Done (⌘↩) now stacks messages, for Claude Code, Codex and Antigravity: while the agent works, each ⌘↩ moves the message in the input box into a queue and empties the box for the next one. They are sent one by one, each after the agent finishes the previous one. The tab shows how many are waiting; hover to see them
+- Click "N queued" on the tab (or right-click → Edit Queued Messages…) to edit, reorder, remove or add queued messages. Nothing is sent while that window is open. ⌘↩ on an empty input box takes the last one back; right-click → Clear Queued Messages drops them all
+- The queue pauses instead of sending when a Claude turn fails or the Mac sleeps mid-reply, after a restart, and when the input box shows anything other than the message about to go out (so two messages can't go out merged as one). ⌘↩ on an empty box resumes it
+
 ## 0.1.22
 
 - Click a session ID shown in a terminal (for example in `claude --resume <id>`, `codex resume <id>` or `agy --conversation <id>`) to resume that session in its own folder, or to switch to its tab when it's already open. Works for Claude Code, Codex and Antigravity; the pointer turns into a hand over IDs Tabwise knows

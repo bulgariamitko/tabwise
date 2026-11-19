@@ -233,7 +233,11 @@ final class DeckStore: ObservableObject {
 
     // MARK: Launch
 
+    /// The app's store, for views that only hold a tab (the queue badge opens the queue editor).
+    static weak var current: DeckStore?
+
     func launch() {
+        Self.current = self
         SessionTab.onReturn = { [weak self] tab in self?.returnPressed(tab) ?? false }
         DropTerminalView.knowsSession = { [weak self] id in self?.sessionLink(id) != nil }
         DropTerminalView.openSession = { [weak self] id in self?.openSessionLink(id) }
@@ -285,7 +289,10 @@ final class DeckStore: ObservableObject {
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                for tab in self?.tabs ?? [] where tab.sendWhenDone && tab.status != .idle { tab.sendWhenDone = false }
+                for tab in self?.tabs ?? [] where tab.status != .idle {
+                    if tab.sendWhenDone { tab.sendWhenDone = false }
+                    if !tab.queued.isEmpty { tab.queuePaused = true }
+                }
             }
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
@@ -726,6 +733,78 @@ final class DeckStore: ObservableObject {
 
     private static var testLinked = false
 
+    /// Test hook: TABWISE_TEST_QUEUE=a|b|c sends "a" in the selected Claude tab, then stacks "b" and "c" with ⌘↩
+    /// while Claude works on it, and writes what happens to queue-test.txt in the state folder.
+    private static var queueStep = 0
+    private static var queueLog = ""
+    private static var queueAt = Date()
+    private func testQueue() {
+        guard let spec = ProcessInfo.processInfo.environment["TABWISE_TEST_QUEUE"], let tab = selected, let agent = tab.agent else { return }
+        let msgs = spec.components(separatedBy: "|")
+        let box = InputBox.read(agent, tab.terminal.getTerminal()) ?? "nil"
+        func log(_ s: String) {
+            Self.queueLog += String(format: "%6.1f ", Date().timeIntervalSince(tab.startedAt)) + s + "\n"
+            try? Self.queueLog.write(to: Self.stateURL.deletingLastPathComponent().appendingPathComponent("queue-test.txt"),
+                                     atomically: true, encoding: .utf8)
+        }
+        let since = Date().timeIntervalSince(Self.queueAt)
+        switch Self.queueStep {
+        case 0:
+            guard tab.status == .idle, tab.claudePid != nil, Date().timeIntervalSince(tab.startedAt) > 8, box == "",
+                  // only into the message box, never into a startup question (update, trust, …)
+                  agent == .claude || AgentScreen.lines(tab.terminal.getTerminal()).suffix(6).joined().lowercased()
+                      .contains(agent == .codex ? "ask codex" : "? for shortcuts") else { return }
+            tab.terminal.insert(msgs[0], submit: true)
+            log("sent [\(msgs[0])]")
+        case 1..<msgs.count:
+            guard since > 2 else { return }
+            tab.terminal.insert(msgs[Self.queueStep], submit: false)
+            log("typed [\(msgs[Self.queueStep])] status \(tab.status)")
+        default:
+            log("status \(tab.status) queued \(tab.queued) paused \(tab.queuePaused) box [\(box)]")
+            if tab.queued.isEmpty, tab.status == .idle, since > 25 {
+                log("SCREEN\n" + DraftReader.dump(tab.terminal.getTerminal(), all: true))
+                Self.queueStep = 999_999
+            }
+            if tab.status != .idle || !tab.queued.isEmpty { Self.queueAt = Date() }
+            return
+        }
+        Self.queueAt = Date()
+        let step = Self.queueStep
+        Self.queueStep += 1
+        if step >= 1 {
+            let typed = msgs[step]
+            func whenShown(_ n: Int, _ then: @escaping () -> Void) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    if n == 4 { log("NOT SHOWN YET\n" + DraftReader.dump(tab.terminal.getTerminal())) }
+                    if (InputBox.read(agent, tab.terminal.getTerminal()) ?? "") == typed || n > 20 { then() } else { whenShown(n + 1, then) }
+                }
+            }
+            whenShown(0) { [weak self] in
+                log("box before ⌘↩ [\(InputBox.read(agent, tab.terminal.getTerminal()) ?? "nil")]")
+                self?.toggleSendWhenDone(tab)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    log("after ⌘↩: queued \(tab.queued) box [\(InputBox.read(agent, tab.terminal.getTerminal()) ?? "nil")] status \(tab.status)")
+                    // TABWISE_TEST_QUEUE_EDIT: after the last one, open the editor, change the first, drop the last.
+                    if step == msgs.count - 1, ProcessInfo.processInfo.environment["TABWISE_TEST_QUEUE_EDIT"] != nil, let self {
+                        self.editQueue(tab)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                            if !tab.queued.isEmpty { tab.queued[0] = "Reply with just the word EDITED." }
+                            if tab.queued.count > 1 { tab.queued.removeLast() }
+                            log("edited: queued \(tab.queued) editing \(tab.queueEditing) windows \(NSApp.windows.map(\.title))")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                                log("still held after 8s: queued \(tab.queued) status \(tab.status)")
+                                NSApp.windows.first { $0.title.hasPrefix("Queued Messages") }?.close()
+                                log("closed editor: queued \(tab.queued) editing \(tab.queueEditing)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if Self.queueStep >= msgs.count { Self.queueStep = 1_000 }
+    }
+
     /// Test hook: TABWISE_TEST_LINK=<id> prints the ID into the selected tab's screen, double-clicks it (SwiftTerm
     /// selects the word it thinks is there, which checks the geometry), then clicks it once.
     private func testLink() {
@@ -770,6 +849,7 @@ final class DeckStore: ObservableObject {
 
     private func poll() {
         testLink()
+        testQueue()
         let entries = Registry.running()
         let appActive = NSApp.isActive
         var statusChanged = false
@@ -779,6 +859,7 @@ final class DeckStore: ObservableObject {
             let previous = tab.status
             if tab.status == .exited || tab.status == .notStarted || tab.archived {
                 if tab.sendWhenDone { tab.sendWhenDone = false }
+                if !tab.queued.isEmpty, !tab.queuePaused { tab.queuePaused = true }
                 continue
             }
             if let agent = tab.agent, agent != .claude {
@@ -805,7 +886,8 @@ final class DeckStore: ObservableObject {
                 tab.reroute(to: tab.tier, sending: nil, note: tab.routeNote)
                 continue
             }
-            if tab.sendWhenDone { sendDraftIfDone(tab) }
+            if tab.queueSentAt != nil, tab.status != .idle { tab.queueSentAt = nil } // Claude took the last one
+            if tab.sendWhenDone { sendDraftIfDone(tab) } else if !tab.queued.isEmpty { sendQueuedIfDone(tab) }
             let finished = previous == .working && (tab.status == .idle || tab.status == .waiting)
             let nowWaiting = previous != .waiting && tab.status == .waiting
             if finished || nowWaiting, !(appActive && tab.id == selectedID) {
@@ -992,32 +1074,139 @@ final class DeckStore: ObservableObject {
         }
     }
 
-    /// Send When Done (⌘↩): you've finished writing the draft in the input box; Tabwise presses Return for you
-    /// once Claude finishes what it's doing, instead of the message cutting into the running turn. Right away if
-    /// Claude is already idle. Again to cancel.
+    /// Send When Done (⌘↩): you've finished writing a message; Tabwise sends it once Claude finishes what it's
+    /// doing, instead of it cutting into the running turn. Right away if Claude is already idle.
+    ///
+    /// Pressed again while Claude works, it stacks messages: each ⌘↩ takes what's in the input box into a queue
+    /// and empties the box for the next one; they go out one per turn, oldest first. ⌘↩ on an empty box takes
+    /// the last queued message back to edit (or resumes a paused queue). A message the box only shows as a
+    /// placeholder ("[Pasted text #1]", "[Image #1]") can't be typed again, so it stays in the box and goes
+    /// first, the way a single Send When Done always worked.
     func toggleSendWhenDone(_ tab: SessionTab) {
         if tab.sendWhenDone { tab.sendWhenDone = false; return }
-        guard tab.isClaude, tab.claudePid != nil,
-              let text = DraftReader.read(tab.terminal.getTerminal()), !text.isEmpty else { NSSound.beep(); return }
-        tab.draft = text
-        tab.sendWhenDone = true
-        sendDraftIfDone(tab)
+        guard let agent = tab.agent, tab.claudePid != nil, let text = InputBox.read(agent, tab.terminal.getTerminal())
+        else { NSSound.beep(); return }
+        if text.isEmpty {
+            if tab.queuePaused {
+                tab.queuePaused = false
+                sendQueuedIfDone(tab)
+            } else if let last = tab.queued.popLast() {
+                tab.terminal.insert(last, submit: false)
+                tab.draft = last
+                scheduleSave()
+            } else {
+                NSSound.beep()
+            }
+            return
+        }
+        // Nothing to wait for: send it now.
+        if tab.queued.isEmpty, tab.status == .idle, tab.pendingDraft == nil {
+            tab.draft = text
+            tab.sendWhenDone = true
+            sendDraftIfDone(tab)
+            return
+        }
+        guard Self.queueable(text) else {
+            // Can't be typed back: it waits in the box instead, ahead of the queue.
+            tab.draft = text
+            tab.sendWhenDone = true
+            return
+        }
+        tab.queued.append(text)
+        clearInputBox(tab, text)
+        tab.draft = nil
+        scheduleSave()
+    }
+
+    func editQueue(_ tab: SessionTab) { QueueEditor.shared.show(tab, store: self) }
+
+    /// The queue window closed: drop emptied messages, save, and let the queue go on.
+    func finishQueueEdit(_ tab: SessionTab) {
+        tab.queueEditing = false
+        tab.queued = tab.queued.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if tab.queued.isEmpty { tab.queuePaused = false }
+        scheduleSave()
+    }
+
+    func clearQueue(_ tab: SessionTab) {
+        tab.queued = []
+        tab.queuePaused = false
+        scheduleSave()
+    }
+
+    /// Whether a message can leave the input box and be typed in again later, as it was.
+    private static func queueable(_ text: String) -> Bool {
+        text.range(of: #"\[(Pasted text|Image|Pasted content|Attachment)[^\]]*\]"#, options: .regularExpression) == nil
+    }
+
+    /// Empties Claude's input box: one Backspace per character (and line break), plus a few spare; extras do
+    /// nothing in an empty box. Not Esc or Ctrl-C, which would stop the turn Claude is working on.
+    private func clearInputBox(_ tab: SessionTab, _ text: String) {
+        tab.terminal.send(txt: "\u{5}") // Ctrl-E: the cursor to the end of the line, in case it was moved
+        tab.terminal.send(txt: String(repeating: "\u{7f}", count: text.count + 8))
+    }
+
+    /// The next queued message, once Claude is done with the last one: idle, nothing typed in the box, and not
+    /// asking you anything.
+    private func sendQueuedIfDone(_ tab: SessionTab) {
+        guard !tab.queuePaused, !tab.queueEditing, !tab.queued.isEmpty, tab.status == .idle, tab.pendingDraft == nil,
+              let agent = tab.agent else { return }
+        // Just sent one and Claude hasn't picked it up yet (a reply can start a second or two later).
+        if let sent = tab.queueSentAt, Date().timeIntervalSince(sent) < 20 { return }
+        guard let box = InputBox.read(agent, tab.terminal.getTerminal()), box.isEmpty else { return } // you're typing
+        // The turn stopped without finishing (an API error, the Mac slept, you pressed Esc): wait for you.
+        if agent == .claude, DraftReader.turnFailed(tab.terminal.getTerminal()) {
+            tab.queuePaused = true
+            NSSound.beep()
+            return
+        }
+        let next = tab.queued.removeFirst()
+        tab.queueSentAt = Date()
+        tab.terminal.insert(next, submit: false)
+        tab.lastActive = Date()
+        scheduleSave()
+        submitQueued(tab, agent, next, tries: 0)
+    }
+
+    /// Return on a queued message once the box shows it. Agents can show a paste a moment late, and something
+    /// else may sit in the box unseen; Return then would send both as one message, so the queue pauses instead.
+    private func submitQueued(_ tab: SessionTab, _ agent: Agent, _ message: String, tries: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, !tab.archived, tab.claudePid != nil else { return }
+            let t = tab.terminal.getTerminal()
+            let box = InputBox.read(agent, t) ?? ""
+            let squash = { (s: String) in s.filter { !$0.isWhitespace } }
+            let shown = squash(box), sent = squash(message)
+            let matches = shown == sent
+                || box.range(of: #"^\[(Pasted text|Pasted content)[^\]]*\]$"#, options: .regularExpression) != nil // a long paste
+                || (!InputBox.showsAll(agent, t) && shown.count >= 30 && sent.hasPrefix(String(shown.prefix(30))))
+            if matches {
+                // Return, the way the key does: the model router gets to look at the message first.
+                if !self.returnPressed(tab) { tab.terminal.send(txt: "\r") }
+            } else if shown.isEmpty, tries < 12 {
+                self.submitQueued(tab, agent, message, tries: tries + 1) // not on screen yet
+            } else {
+                tab.queuePaused = true
+                NSSound.beep()
+            }
+        }
     }
 
     private func sendDraftIfDone(_ tab: SessionTab) {
         // Only when the turn is over: not while it works, and never while Claude asks you something
         // (Return there would answer the question).
-        guard tab.status == .idle, tab.pendingDraft == nil else { return }
+        guard tab.status == .idle, tab.pendingDraft == nil, let agent = tab.agent else { return }
         // No input box on screen (a dialog, a menu): try again on the next poll.
-        guard let text = DraftReader.read(tab.terminal.getTerminal()) else { return }
+        guard let text = InputBox.read(agent, tab.terminal.getTerminal()) else { return }
         tab.sendWhenDone = false
         guard !text.isEmpty else { return } // you sent or cleared it yourself
         // The turn stopped without finishing (an API error, the Mac slept, you pressed Esc): keep the draft unsent.
-        guard !DraftReader.turnFailed(tab.terminal.getTerminal()) else { NSSound.beep(); return }
-        if routeMessage(tab) { return } // the router restarted Claude on another model with the draft
+        guard agent != .claude || !DraftReader.turnFailed(tab.terminal.getTerminal()) else { NSSound.beep(); return }
+        if returnPressed(tab) { return } // the router restarted the session on another model with the draft
         tab.terminal.send(txt: "\r")
         tab.draft = nil
         tab.lastActive = Date()
+        tab.queueSentAt = Date() // queued messages wait for this one's turn
     }
 
     // MARK: Model router
