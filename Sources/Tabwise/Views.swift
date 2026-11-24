@@ -332,6 +332,10 @@ struct Sidebar: View {
                 store.toggleSendWhenDone(tab)
             }
             .keyboardShortcut(.return, modifiers: .command)
+            if agent == .claude {
+                Toggle("Auto-allow What Auto Mode Blocks", isOn: Binding(
+                    get: { tab.autoAllow }, set: { tab.autoAllowOverride = $0 }))
+            }
             if !tab.queued.isEmpty {
                 Button("Edit Queued Messages…") { store.editQueue(tab) }
                 Button("Clear \(tab.queued.count) Queued Message\(tab.queued.count == 1 ? "" : "s")") { store.clearQueue(tab) }

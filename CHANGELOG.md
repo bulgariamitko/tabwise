@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.24
+
+- Auto-allow what auto mode blocks (Settings → Sessions, on by default): when auto mode's safety check blocks a command, Claude goes on instead of stopping at "Auto mode blocked … Allow it?" (the ask-on-deny mod). Right-click a Claude tab → Auto-allow What Auto Mode Blocks to turn it off or on for that session alone. Switching either one reaches running sessions right away (for sessions started in 0.1.24 or later)
+- ⌘↩ now stacks messages that contain pasted text (shown as "[Pasted text #1 +4 lines]"): Tabwise puts the pasted text back into the queued message, empties the box and lets you write the next one. Before, such a message stayed in the box and a second ⌘↩ cancelled it. Images, and text pasted before Tabwise started, still stay in the box until Claude finishes
+
 ## 0.1.23
 
 - Send When Done (⌘↩) now stacks messages, for Claude Code, Codex and Antigravity: while the agent works, each ⌘↩ moves the message in the input box into a queue and empties the box for the next one. They are sent one by one, each after the agent finishes the previous one. The tab shows how many are waiting; hover to see them

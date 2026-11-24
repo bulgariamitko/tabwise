@@ -758,7 +758,12 @@ final class DeckStore: ObservableObject {
             log("sent [\(msgs[0])]")
         case 1..<msgs.count:
             guard since > 2 else { return }
-            tab.terminal.insert(msgs[Self.queueStep], submit: false)
+            // "⏎" is a line break; "§" ends a paste and what follows is typed, like pasting and then writing on.
+            let parts = msgs[Self.queueStep].replacingOccurrences(of: "⏎", with: "\n").components(separatedBy: "§")
+            tab.terminal.insert(parts[0], submit: false)
+            if parts.count > 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { tab.terminal.send(txt: parts[1]) }
+            }
             log("typed [\(msgs[Self.queueStep])] status \(tab.status)")
         default:
             log("status \(tab.status) queued \(tab.queued) paused \(tab.queuePaused) box [\(box)]")
@@ -777,7 +782,9 @@ final class DeckStore: ObservableObject {
             func whenShown(_ n: Int, _ then: @escaping () -> Void) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     if n == 4 { log("NOT SHOWN YET\n" + DraftReader.dump(tab.terminal.getTerminal())) }
-                    if (InputBox.read(agent, tab.terminal.getTerminal()) ?? "") == typed || n > 20 { then() } else { whenShown(n + 1, then) }
+                    let box = InputBox.read(agent, tab.terminal.getTerminal()) ?? ""
+                    let tail = typed.components(separatedBy: "§").last!.trimmingCharacters(in: .whitespaces)
+                    if box == typed || (typed.contains("§") && box.hasSuffix(tail)) || n > 20 { then() } else { whenShown(n + 1, then) }
                 }
             }
             whenShown(0) { [weak self] in
@@ -1080,8 +1087,8 @@ final class DeckStore: ObservableObject {
     /// Pressed again while Claude works, it stacks messages: each ⌘↩ takes what's in the input box into a queue
     /// and empties the box for the next one; they go out one per turn, oldest first. ⌘↩ on an empty box takes
     /// the last queued message back to edit (or resumes a paused queue). A message the box only shows as a
-    /// placeholder ("[Pasted text #1]", "[Image #1]") can't be typed again, so it stays in the box and goes
-    /// first, the way a single Send When Done always worked.
+    /// placeholder Tabwise can't fill in ("[Image #1]", a paste from before Tabwise started) can't be typed
+    /// again, so it stays in the box and goes first, the way a single Send When Done always worked.
     func toggleSendWhenDone(_ tab: SessionTab) {
         if tab.sendWhenDone { tab.sendWhenDone = false; return }
         guard let agent = tab.agent, tab.claudePid != nil, let text = InputBox.read(agent, tab.terminal.getTerminal())
@@ -1106,13 +1113,15 @@ final class DeckStore: ObservableObject {
             sendDraftIfDone(tab)
             return
         }
-        guard Self.queueable(text) else {
-            // Can't be typed back: it waits in the box instead, ahead of the queue.
+        // Long pastes show as "[Pasted text #1 +4 lines]": put back what was pasted, so it can be typed again later.
+        guard let full = tab.terminal.expandPastes(text), Self.queueable(full) else {
+            // Can't be typed back (an image, or a paste from before Tabwise started): it waits in the box
+            // instead, ahead of the queue.
             tab.draft = text
             tab.sendWhenDone = true
             return
         }
-        tab.queued.append(text)
+        tab.queued.append(full)
         clearInputBox(tab, text)
         tab.draft = nil
         scheduleSave()

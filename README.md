@@ -17,6 +17,7 @@ in a sidebar with live status, and nothing is lost when you quit, restart, or mo
 - **Import** the sessions you already have running in Terminal, or **resume** any session by pasting `claude --resume <id>` (flags are kept).
 - **Split view**, <kbd>⌘K</kbd> quick switcher, menu bar icon with live counts.
 - **Queue messages while the agent works** (Claude Code, Codex, Antigravity): type a message and press <kbd>⌘↩</kbd>, and it waits for the current turn to finish instead of cutting in. Press it again for each new message to stack as many as you like; they go out one by one, each after the previous reply. Click "N queued" on the tab to edit, reorder or remove them before they're sent.
+- **Auto-allow what auto mode blocks** (Claude Code, on by default): when auto mode's safety check blocks a command, Claude goes ahead instead of asking "Auto mode blocked … Allow it?". Turn it off for every session in Settings → Sessions, or for one session from its tab's right-click menu.
 
 **Model router** (off by default; Settings → Model Router)
 - Tabwise reads the message you send and **puts the job on the model that fits it**: a light model for questions and chores, your everyday model for normal work, the strongest one for design, hard bugs and big changes. It works the same way for Claude Code, Codex and Antigravity, and you choose the model and effort for each level.

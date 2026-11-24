@@ -29,6 +29,23 @@ enum DeckSettings {
         Bundle.main.path(forResource: "statusline", ofType: "sh")
     }
 
+    /// Let through the calls Claude's auto mode blocks, instead of the ask-on-deny mod asking; on by default.
+    /// Stored as files the mod reads on each block (`off` here; one per tab that differs, named by its id),
+    /// so switching it reaches sessions that are already running.
+    static var autoAllow: Bool {
+        get { !FileManager.default.fileExists(atPath: autoAllowDir.appendingPathComponent("off").path) }
+        set {
+            let off = autoAllowDir.appendingPathComponent("off")
+            try? FileManager.default.createDirectory(at: autoAllowDir, withIntermediateDirectories: true)
+            if newValue { try? FileManager.default.removeItem(at: off) }
+            else { FileManager.default.createFile(atPath: off.path, contents: Data()) }
+        }
+    }
+
+    static var autoAllowDir: URL {
+        DeckStore.stateURL.deletingLastPathComponent().appendingPathComponent("auto-allow")
+    }
+
     enum KeepAwakeMode: String, CaseIterable { case working, open, never }
 
     /// When to stop the Mac from idle-sleeping (battery included).
@@ -109,6 +126,7 @@ struct SettingsView: View {
     @State private var command = DeckSettings.defaultCommand
     @State private var archiveDays = DeckSettings.autoArchiveDays
     @State private var statusLine = DeckSettings.builtInStatusLine
+    @State private var autoAllow = DeckSettings.autoAllow
     @State private var shareMCP = MCPShare.enabled
     @State private var keepAwake = DeckSettings.keepAwake
     @State private var restartRunning = DeckSettings.restartRunning
@@ -261,6 +279,10 @@ struct SettingsView: View {
                 }
                 .onChange(of: archiveDays) { _, v in DeckSettings.autoArchiveDays = v }
                 Text("Idle, unpinned sessions you haven't messaged in that long are stopped to free memory. Unarchive resumes them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Auto-allow what auto mode blocks", isOn: $autoAllow)
+                    .onChange(of: autoAllow) { _, v in DeckSettings.autoAllow = v }
+                Text("When auto mode's safety check blocks a command, Claude goes on instead of asking \"Auto mode blocked … Allow it?\" (the ask-on-deny mod). For every session; right-click a tab to change it for that one. Applies to running sessions started in Tabwise 0.1.24 or later.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Built-in status line", isOn: $statusLine)
                     .onChange(of: statusLine) { _, v in DeckSettings.builtInStatusLine = v }

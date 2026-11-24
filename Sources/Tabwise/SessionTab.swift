@@ -216,11 +216,17 @@ final class SessionTab: ObservableObject, Identifiable {
             // The router's model and effort replace the ones in the tab's own flags.
             if let routed { flags = Self.dropping(routed.filter { $0.hasPrefix("--") }, from: flags) + routed }
             var parts = ["claude"] + flags.map(ResumeCommand.shellQuote)
-            if DeckSettings.builtInStatusLine, let script = DeckSettings.statusLineScript,
-               let json = try? JSONSerialization.data(withJSONObject: [
-                   "statusLine": ["type": "command", "command": ResumeCommand.shellQuote(script), "padding": 0],
-               ]), let settings = String(data: json, encoding: .utf8) {
-                parts += ["--settings", ResumeCommand.shellQuote(settings)]
+            var settings: [String: Any] = [:]
+            if DeckSettings.builtInStatusLine, let script = DeckSettings.statusLineScript {
+                settings["statusLine"] = ["type": "command", "command": ResumeCommand.shellQuote(script), "padding": 0]
+            }
+            // The ask-on-deny mod reads these to let calls auto mode blocked through without asking: the switch
+            // files are read on each block, so changing the setting reaches the running session.
+            extraEnv["TABWISE_AUTO_ALLOW_DIR"] = DeckSettings.autoAllowDir.path
+            extraEnv["TABWISE_TAB_ID"] = id.uuidString
+            if !settings.isEmpty, let json = try? JSONSerialization.data(withJSONObject: settings),
+               let text = String(data: json, encoding: .utf8) {
+                parts += ["--settings", ResumeCommand.shellQuote(text)]
             }
             // Enabled mods, as flags: a CLAUDE_CODE_PLUGIN_DIRS in the user's settings.json would override an env var.
             for path in Mods.toLoad() { parts += ["--plugin-dir", ResumeCommand.shellQuote(path)] }
@@ -355,6 +361,27 @@ final class SessionTab: ObservableObject, Identifiable {
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         return env.map { "\($0.key)=\($0.value)" }
     }
+
+    /// Auto-allow for this tab alone: nil follows the setting. Stored as the file the ask-on-deny mod reads.
+    var autoAllowOverride: Bool? {
+        get {
+            guard let text = try? String(contentsOf: autoAllowFile, encoding: .utf8) else { return nil }
+            return text.hasPrefix("on") ? true : text.hasPrefix("off") ? false : nil
+        }
+        set {
+            objectWillChange.send()
+            if let newValue, newValue != DeckSettings.autoAllow {
+                try? FileManager.default.createDirectory(at: DeckSettings.autoAllowDir, withIntermediateDirectories: true)
+                try? (newValue ? "on" : "off").write(to: autoAllowFile, atomically: true, encoding: .utf8)
+            } else {
+                try? FileManager.default.removeItem(at: autoAllowFile) // same as the setting: follow it again
+            }
+        }
+    }
+
+    var autoAllow: Bool { autoAllowOverride ?? DeckSettings.autoAllow }
+
+    private var autoAllowFile: URL { DeckSettings.autoAllowDir.appendingPathComponent(id.uuidString) }
 
     /// The window title as the agent set it (Codex shows its working spinner there).
     var rawTitle: String?

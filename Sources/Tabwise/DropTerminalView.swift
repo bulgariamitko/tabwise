@@ -12,6 +12,43 @@ final class DropTerminalView: LocalProcessTerminalView {
     }()
 
     private var highlight: NSView?
+    /// Text pasted into this session, newest last. Claude shows a long paste only as "[Pasted text #3 +4 lines]",
+    /// so to take a message out of its box (⌘↩ stacking) Tabwise puts the pasted text back in its place.
+    private(set) var recentPastes: [String] = []
+
+    private func remember(_ text: String) {
+        let t = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        guard t.contains("\n") || t.count > 200 else { return }
+        recentPastes.append(t)
+        if recentPastes.count > 40 { recentPastes.removeFirst(recentPastes.count - 40) }
+    }
+
+    /// `text` with each "[Pasted text #N +K lines]" replaced by what was pasted; nil if one can't be found.
+    /// Placeholders are matched to pastes by line count, the newest paste going to the highest number.
+    func expandPastes(_ text: String) -> String? {
+        let re = try! NSRegularExpression(pattern: #"\[Pasted text #(\d+)(?: \+(\d+) lines?)?\]"#)
+        let ns = text as NSString
+        let found = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !found.isEmpty else { return text }
+        var used = Set<Int>(), fill = [Int: String]() // match index -> pasted text
+        let byNumber = found.indices.sorted {
+            Int(ns.substring(with: found[$0].range(at: 1)))! > Int(ns.substring(with: found[$1].range(at: 1)))!
+        }
+        for i in byNumber {
+            let r = found[i].range(at: 2)
+            let lines = r.location == NSNotFound ? 0 : Int(ns.substring(with: r))!
+            guard let j = recentPastes.indices.reversed().first(where: {
+                !used.contains($0) && recentPastes[$0].filter { $0 == "\n" }.count == lines
+            }) else { return nil }
+            used.insert(j)
+            fill[i] = recentPastes[j]
+        }
+        var out = text
+        for i in found.indices.reversed() {
+            out = (out as NSString).replacingCharacters(in: found[i].range, with: fill[i]!)
+        }
+        return out
+    }
     /// Set by the owning tab: true while Claude Code (not just a shell) is running in this terminal.
     var claudeActive: () -> Bool = { false }
 
@@ -200,6 +237,7 @@ final class DropTerminalView: LocalProcessTerminalView {
             }
             return
         }
+        if let text = pb.string(forType: .string) { remember(text) }
         super.paste(sender)
     }
 
@@ -243,6 +281,7 @@ final class DropTerminalView: LocalProcessTerminalView {
     }
 
     private func pasteText(_ text: String) {
+        remember(text)
         let bracketed = getTerminal().bracketedPasteMode
         let payload = bracketed ? "\u{1b}[200~" + text + "\u{1b}[201~" : text
         send(txt: payload)
