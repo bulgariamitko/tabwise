@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.26
+
+- "Also answer Yes when a command deletes files" (Settings → Sessions, under Auto-allow) is now off by default: Claude Code asks you before an rm it can't check, unless you turn it on
+
 ## 0.1.25
 
 - Schedule a message: right-click a session → Schedule Message… and pick a time (or 15 min, 1 hour, 3 hours, tomorrow 9:00). When it's due it joins the queue, so it waits for a turn in progress; a sleeping session is woken for it. The tab shows the next time; click it to change or cancel

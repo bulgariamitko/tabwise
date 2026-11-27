@@ -43,14 +43,15 @@ enum DeckSettings {
     }
 
     /// Auto-allow also answers Yes to Claude Code's dangerous-removal questions ("Dangerous rm operation on …",
-    /// "can't be sure it read this command"); on by default. Off is a `no-removals` file the mod reads.
+    /// "can't be sure it read this command"); off by default. On is a `removals` file the mod reads.
     static var autoAllowRemovals: Bool {
-        get { !FileManager.default.fileExists(atPath: autoAllowDir.appendingPathComponent("no-removals").path) }
+        get { FileManager.default.fileExists(atPath: autoAllowDir.appendingPathComponent("removals").path) }
         set {
-            let file = autoAllowDir.appendingPathComponent("no-removals")
+            let file = autoAllowDir.appendingPathComponent("removals")
             try? FileManager.default.createDirectory(at: autoAllowDir, withIntermediateDirectories: true)
-            if newValue { try? FileManager.default.removeItem(at: file) }
-            else { FileManager.default.createFile(atPath: file.path, contents: Data()) }
+            try? FileManager.default.removeItem(at: autoAllowDir.appendingPathComponent("no-removals")) // 0.1.25's
+            if newValue { FileManager.default.createFile(atPath: file.path, contents: Data()) }
+            else { try? FileManager.default.removeItem(at: file) }
         }
     }
 
