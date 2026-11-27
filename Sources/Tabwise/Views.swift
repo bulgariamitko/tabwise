@@ -332,9 +332,13 @@ struct Sidebar: View {
                 store.toggleSendWhenDone(tab)
             }
             .keyboardShortcut(.return, modifiers: .command)
+            Button(tab.scheduled.isEmpty ? "Schedule Message…" : "Scheduled Messages (\(tab.scheduled.count))…") {
+                TabWindows.schedule(tab, store: store)
+            }
             if agent == .claude {
                 Toggle("Auto-allow What Auto Mode Blocks", isOn: Binding(
                     get: { tab.autoAllow }, set: { tab.autoAllowOverride = $0 }))
+                Button("Auto-Allowed Commands…") { TabWindows.autoAllowed(tab) }
             }
             if !tab.queued.isEmpty {
                 Button("Edit Queued Messages…") { store.editQueue(tab) }
@@ -640,13 +644,27 @@ struct AgentBadge: View {
 
 struct TabMeta: View {
     @ObservedObject var tab: SessionTab
+
+    static func queueHelp(_ tab: SessionTab) -> String {
+        let list: String = tab.queued.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        var head: String
+        if tab.queuePaused {
+            let why: String = tab.queuePauseReason ?? "the last turn didn't finish, or Tabwise restarted"
+            head = "Paused: " + why + ". ⌘↩ on an empty input box resumes."
+        } else {
+            head = "Sent one by one as " + (tab.agent?.name ?? "the agent") + " finishes each turn."
+            if let wait = tab.queueWait { head += "\nNow waiting: " + wait + "." }
+        }
+        return head + "\n\n" + list + "\n\nClick to edit, reorder or remove them. ⌘↩ on an empty input box takes the last one back."
+    }
     var body: some View {
         let showMemory = !tab.archived && tab.memory > 0
         // What the session runs on, when Tabwise set it: the router's choice (wand) or your own (pin).
         let routed = tab.archived ? nil : tab.agent.flatMap {
             Router.label($0, tier: tab.tier, model: tab.modelPick, effort: tab.effortPick)
         }
-        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone || !tab.queued.isEmpty || routed != nil {
+        if tab.git != nil || showMemory || tab.draft != nil || tab.sendWhenDone || !tab.queued.isEmpty || routed != nil
+            || !tab.scheduled.isEmpty {
             HStack(spacing: 10) {
                 if let routed {
                     let automatic = tab.modelPick == .auto && tab.effortPick == .auto
@@ -657,15 +675,21 @@ struct TabMeta: View {
                               + "\nRight-click the tab → Model or Effort to change it.")
                 }
                 if !tab.queued.isEmpty {
-                    let list = tab.queued.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
                     Label("\(tab.queued.count) queued" + (tab.queuePaused ? ", paused" : ""), systemImage: "tray.full")
                         .foregroundStyle(tab.queuePaused ? Color.orange.opacity(0.9) : Color.green.opacity(0.9))
-                        .help((tab.queuePaused
-                               ? "Paused: the last turn didn't finish, or Tabwise restarted. ⌘↩ on an empty input box resumes.\n\n"
-                               : "Sent one by one as \(tab.agent?.name ?? "the agent") finishes each turn.\n\n")
-                              + list + "\n\nClick to edit, reorder or remove them. ⌘↩ on an empty input box takes the last one back.")
+                        .help(Self.queueHelp(tab))
                         .contentShape(Rectangle())
                         .onTapGesture { DeckStore.current?.editQueue(tab) }
+                }
+                if let next = tab.scheduled.first {
+                    let list = tab.scheduled.map { "\($0.at.formatted(date: .abbreviated, time: .shortened)): \($0.text)" }
+                        .joined(separator: "\n")
+                    Label(next.at.formatted(date: Calendar.current.isDateInToday(next.at) ? .omitted : .abbreviated, time: .shortened)
+                          + (tab.scheduled.count > 1 ? " +\(tab.scheduled.count - 1)" : ""), systemImage: "clock")
+                        .foregroundStyle(.blue.opacity(0.9))
+                        .help("Scheduled:\n" + list + "\n\nClick to change.")
+                        .contentShape(Rectangle())
+                        .onTapGesture { if let store = DeckStore.current { TabWindows.schedule(tab, store: store) } }
                 }
                 if tab.sendWhenDone {
                     Label("Sends when done", systemImage: "paperplane")

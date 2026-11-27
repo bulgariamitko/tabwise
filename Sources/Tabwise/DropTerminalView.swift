@@ -23,9 +23,26 @@ final class DropTerminalView: LocalProcessTerminalView {
         if recentPastes.count > 40 { recentPastes.removeFirst(recentPastes.count - 40) }
     }
 
+    /// Image files that went into this session (pasted or dropped), newest last. Claude shows each as
+    /// "[Image #2]"; to stack such a message Tabwise keeps the file and pastes its path again when it's sent.
+    private(set) var recentImages: [String] = []
+
+    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp"]
+
+    private func rememberImages(_ paths: [String]) {
+        recentImages += paths.filter { Self.imageExtensions.contains(($0 as NSString).pathExtension.lowercased()) }
+        if recentImages.count > 40 { recentImages.removeFirst(recentImages.count - 40) }
+    }
+
+    /// How a queued message holds an image: "[Image file: /escaped/path.png]".
+    static let imageTokenPattern = #"\[Image file: ((?:\\.|[^\]\\])+)\]"#
+
+    static func imageToken(_ path: String) -> String { "[Image file: \(escape(path))]" }
+
     /// `text` with each "[Pasted text #N +K lines]" replaced by what was pasted; nil if one can't be found.
     /// Placeholders are matched to pastes by line count, the newest paste going to the highest number.
     func expandPastes(_ text: String) -> String? {
+        guard let text = expandImages(text) else { return nil }
         let re = try! NSRegularExpression(pattern: #"\[Pasted text #(\d+)(?: \+(\d+) lines?)?\]"#)
         let ns = text as NSString
         let found = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
@@ -49,6 +66,56 @@ final class DropTerminalView: LocalProcessTerminalView {
         }
         return out
     }
+    /// `text` with each "[Image #N]" replaced by an image token for the file behind it (the newest image going
+    /// to the highest number); nil if one can't be found (an image from before Tabwise started, or gone).
+    private func expandImages(_ text: String) -> String? {
+        let re = try! NSRegularExpression(pattern: #"\[Image #(\d+)\]"#)
+        let ns = text as NSString
+        let found = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !found.isEmpty else { return text }
+        let byNumber = found.indices.sorted {
+            Int(ns.substring(with: found[$0].range(at: 1)))! > Int(ns.substring(with: found[$1].range(at: 1)))!
+        }
+        var fill = [Int: String](), next = recentImages.count - 1
+        for i in byNumber {
+            while next >= 0, !FileManager.default.fileExists(atPath: recentImages[next]) { next -= 1 }
+            guard next >= 0 else { return nil }
+            fill[i] = Self.imageToken(recentImages[next])
+            next -= 1
+        }
+        var out = text
+        for i in found.indices.reversed() {
+            out = (out as NSString).replacingCharacters(in: found[i].range, with: fill[i]!)
+        }
+        return out
+    }
+
+    /// Types a queued message back in: its text as pastes, and each image token as the image's path pasted
+    /// alone (as a drop does), which Claude turns into an attached image. Calls `done` once all of it is in.
+    func insertQueued(_ text: String, done: @escaping () -> Void = {}) {
+        let re = try! NSRegularExpression(pattern: Self.imageTokenPattern)
+        let ns = text as NSString
+        var parts: [(isImage: Bool, text: String)] = [], at = 0
+        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            if m.range.location > at { parts.append((false, ns.substring(with: NSRange(location: at, length: m.range.location - at)))) }
+            parts.append((true, ns.substring(with: m.range(at: 1)) + " "))
+            at = m.range.location + m.range.length
+        }
+        if at < ns.length { parts.append((false, ns.substring(from: at))) }
+        guard parts.contains(where: \.isImage) else { insert(text, submit: false); done(); return }
+        func step(_ i: Int) {
+            guard i < parts.count else { done(); return }
+            var piece = parts[i].text
+            // The path is already escaped; text right after an image loses the space the token stood in for.
+            if !parts[i].isImage, i > 0, parts[i - 1].isImage, piece.hasPrefix(" ") { piece.removeFirst() }
+            if !piece.isEmpty { pasteText(piece) }
+            // Claude reads the image file before it shows it; give it time, so what comes next lands after it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + (parts[i].isImage ? 0.8 : 0.2)) { step(i + 1) }
+        }
+        step(0)
+        if !isHidden { window?.makeFirstResponder(self) }
+    }
+
     /// Set by the owning tab: true while Claude Code (not just a shell) is running in this terminal.
     var claudeActive: () -> Bool = { false }
 
@@ -213,6 +280,7 @@ final class DropTerminalView: LocalProcessTerminalView {
         showHighlight(false)
         let paths = Self.paths(from: sender.draggingPasteboard)
         guard !paths.isEmpty else { return false }
+        rememberImages(paths)
         pasteText(paths.map(Self.escape).joined(separator: " ") + " ")
         window?.makeFirstResponder(self)
         return true
@@ -224,12 +292,14 @@ final class DropTerminalView: LocalProcessTerminalView {
         let pb = NSPasteboard.general
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
+            rememberImages(urls.map(\.path))
             pasteText(urls.map { Self.escape($0.path) }.joined(separator: " ") + " ")
             return
         }
         let hasImage = pb.availableType(from: [.png, .tiff]) != nil
         if hasImage && pb.string(forType: .string) == nil {
             if claudeActive() {
+                rememberImages(Self.paths(from: pb)) // a copy, to paste again if the message is stacked
                 send(txt: "\u{16}") // Ctrl+V
             } else {
                 let paths = Self.paths(from: pb)

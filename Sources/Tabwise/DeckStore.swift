@@ -120,7 +120,10 @@ final class DeckStore: ObservableObject {
 
     // MARK: Search (one box, the same in Open and All Sessions)
 
-    @Published var search = ""
+    @Published var search = "" {
+        // Starting a search rescans past sessions, so ones started or closed since the last scan are found too.
+        didSet { if oldValue.isEmpty && !search.isEmpty { history.refresh() } }
+    }
     /// ⌘F: bumped to put the cursor in the sidebar's search box.
     @Published var searchFocusRequest = 0
     @Published var deepSearch = UserDefaults.standard.bool(forKey: "historyDeepSearch") {
@@ -159,7 +162,8 @@ final class DeckStore: ObservableObject {
     }
 
     private func fields(of item: HistoryItem) -> [String] {
-        [historyName(item), item.cwd ?? "", item.firstPrompt ?? "", item.lastPrompt ?? "", history.note(item.id) ?? ""]
+        [historyName(item), item.cwd ?? "", item.firstPrompt ?? "", item.lastPrompt ?? "", history.note(item.id) ?? "",
+         item.userWords ?? ""]
     }
 
     private static func searchable(_ s: String) -> String {
@@ -270,7 +274,10 @@ final class DeckStore: ObservableObject {
             }
         }
         if ProcessInfo.processInfo.environment["TABWISE_START_MODE"] == "history" { sidebarMode = .history }
-        history.onRefreshed = { [weak self] items in self?.prompts.seedIfNeeded(from: items) }
+        history.onRefreshed = { [weak self] items in
+            self?.prompts.seedIfNeeded(from: items)
+            self?.objectWillChange.send() // the Open list's search shows past sessions too
+        }
         colorsWatch = folderColors.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         backupWatch = backup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         history.refresh() // background; also keeps ⌘K and names current
@@ -291,7 +298,7 @@ final class DeckStore: ObservableObject {
             MainActor.assumeIsolated {
                 for tab in self?.tabs ?? [] where tab.status != .idle {
                     if tab.sendWhenDone { tab.sendWhenDone = false }
-                    if !tab.queued.isEmpty { tab.queuePaused = true }
+                    if !tab.queued.isEmpty { tab.queuePaused = true; tab.queuePauseReason = "the Mac went to sleep during a turn" }
                 }
             }
         }
@@ -386,6 +393,7 @@ final class DeckStore: ObservableObject {
         if splitID == tab.id { splitID = nil }
         if selectedID == tab.id { selectedID = next?.id }
         scheduleSave()
+        history.refresh() // so a search finds it among past sessions
     }
 
     /// The tab to select when `tab` leaves the list: the one below it, else the one above.
@@ -863,10 +871,14 @@ final class DeckStore: ObservableObject {
         refreshTranscripts()
         var processes: [AgentProcess.Proc]?
         for tab in tabs {
+            sendScheduledIfDue(tab)
             let previous = tab.status
             if tab.status == .exited || tab.status == .notStarted || tab.archived {
                 if tab.sendWhenDone { tab.sendWhenDone = false }
-                if !tab.queued.isEmpty, !tab.queuePaused { tab.queuePaused = true }
+                if !tab.queued.isEmpty, !tab.queuePaused {
+                    tab.queuePaused = true
+                    tab.queuePauseReason = tab.status == .exited ? "the session ended" : "the session isn't running"
+                }
                 continue
             }
             if let agent = tab.agent, agent != .claude {
@@ -916,7 +928,7 @@ final class DeckStore: ObservableObject {
         if Demo.tabs != nil { Demo.apply(to: tabs); objectWillChange.send() } // README screenshots only
         tick += 1
         if tick % 5 == 1 { refreshMonitors(git: tick % 15 == 1) }
-        if tick % 60 == 30 { autoArchiveIdle() }
+        if tick % 60 == 30 { autoArchiveIdle(); autoSleepIdle() }
         if tick % 2 == 0 { scanDrafts() }
         if tick % 60 == 45 { backup.backupAppData(tabCount: tabs.count) }
         if tick % 3600 == 120 { backupConversationsNow() } // hourly (first run 2 min after launch)
@@ -1098,7 +1110,7 @@ final class DeckStore: ObservableObject {
                 tab.queuePaused = false
                 sendQueuedIfDone(tab)
             } else if let last = tab.queued.popLast() {
-                tab.terminal.insert(last, submit: false)
+                tab.terminal.insertQueued(last)
                 tab.draft = last
                 scheduleSave()
             } else {
@@ -1113,9 +1125,10 @@ final class DeckStore: ObservableObject {
             sendDraftIfDone(tab)
             return
         }
-        // Long pastes show as "[Pasted text #1 +4 lines]": put back what was pasted, so it can be typed again later.
+        // Long pastes show as "[Pasted text #1 +4 lines]" and images as "[Image #2]": put back what was pasted
+        // (an image as its file), so it can be typed again later.
         guard let full = tab.terminal.expandPastes(text), Self.queueable(full) else {
-            // Can't be typed back (an image, or a paste from before Tabwise started): it waits in the box
+            // Can't be typed back (an image or a paste from before Tabwise started): it waits in the box
             // instead, ahead of the queue.
             tab.draft = text
             tab.sendWhenDone = true
@@ -1145,7 +1158,16 @@ final class DeckStore: ObservableObject {
 
     /// Whether a message can leave the input box and be typed in again later, as it was.
     private static func queueable(_ text: String) -> Bool {
-        text.range(of: #"\[(Pasted text|Image|Pasted content|Attachment)[^\]]*\]"#, options: .regularExpression) == nil
+        let rest = text.replacingOccurrences(of: DropTerminalView.imageTokenPattern, with: "", options: .regularExpression)
+        return rest.range(of: #"\[(Pasted text|Image|Pasted content|Attachment)[^\]]*\]"#, options: .regularExpression) == nil
+    }
+
+    /// A message as the input box shows it, for comparing: images (Claude's "[Image #3]", or Tabwise's image
+    /// token for the file) count the same, and whitespace doesn't count.
+    private static func comparable(_ s: String) -> String {
+        s.replacingOccurrences(of: DropTerminalView.imageTokenPattern, with: "<image>", options: .regularExpression)
+            .replacingOccurrences(of: #"\[Image #\d+\]"#, with: "<image>", options: .regularExpression)
+            .filter { !$0.isWhitespace }
     }
 
     /// Empties Claude's input box: one Backspace per character (and line break), plus a few spare; extras do
@@ -1158,23 +1180,29 @@ final class DeckStore: ObservableObject {
     /// The next queued message, once Claude is done with the last one: idle, nothing typed in the box, and not
     /// asking you anything.
     private func sendQueuedIfDone(_ tab: SessionTab) {
-        guard !tab.queuePaused, !tab.queueEditing, !tab.queued.isEmpty, tab.status == .idle, tab.pendingDraft == nil,
-              let agent = tab.agent else { return }
-        // Just sent one and Claude hasn't picked it up yet (a reply can start a second or two later).
-        if let sent = tab.queueSentAt, Date().timeIntervalSince(sent) < 20 { return }
-        guard let box = InputBox.read(agent, tab.terminal.getTerminal()), box.isEmpty else { return } // you're typing
+        guard let wait = queueWaitReason(tab) else {
+            if tab.queueWait != nil { tab.queueWait = nil }
+            return
+        }
+        // Shown on the tab's "N queued" (hover), so a queue that doesn't move says why.
+        if wait != "" {
+            if tab.queueWait != wait { tab.queueWait = wait }
+            return
+        }
+        if tab.queueWait != nil { tab.queueWait = nil }
+        guard let agent = tab.agent else { return }
         // The turn stopped without finishing (an API error, the Mac slept, you pressed Esc): wait for you.
         if agent == .claude, DraftReader.turnFailed(tab.terminal.getTerminal()) {
             tab.queuePaused = true
+            tab.queuePauseReason = "the last turn didn't finish (an error, Esc, or the Mac slept)"
             NSSound.beep()
             return
         }
         let next = tab.queued.removeFirst()
         tab.queueSentAt = Date()
-        tab.terminal.insert(next, submit: false)
         tab.lastActive = Date()
         scheduleSave()
-        submitQueued(tab, agent, next, tries: 0)
+        tab.terminal.insertQueued(next) { [weak self] in self?.submitQueued(tab, agent, next, tries: 0) }
     }
 
     /// Return on a queued message once the box shows it. Agents can show a paste a moment late, and something
@@ -1184,8 +1212,7 @@ final class DeckStore: ObservableObject {
             guard let self, !tab.archived, tab.claudePid != nil else { return }
             let t = tab.terminal.getTerminal()
             let box = InputBox.read(agent, t) ?? ""
-            let squash = { (s: String) in s.filter { !$0.isWhitespace } }
-            let shown = squash(box), sent = squash(message)
+            let shown = Self.comparable(box), sent = Self.comparable(message)
             let matches = shown == sent
                 || box.range(of: #"^\[(Pasted text|Pasted content)[^\]]*\]$"#, options: .regularExpression) != nil // a long paste
                 || (!InputBox.showsAll(agent, t) && shown.count >= 30 && sent.hasPrefix(String(shown.prefix(30))))
@@ -1196,9 +1223,61 @@ final class DeckStore: ObservableObject {
                 self.submitQueued(tab, agent, message, tries: tries + 1) // not on screen yet
             } else {
                 tab.queuePaused = true
+                tab.queuePauseReason = "the input box showed something other than the message about to go out, so it wasn't sent"
                 NSSound.beep()
             }
         }
+    }
+
+    /// Why the next queued message can't go out yet: nil when there's nothing to send (or it's paused, which the
+    /// tab shows on its own), "" when it can go now, else the reason in a few words.
+    private func queueWaitReason(_ tab: SessionTab) -> String? {
+        guard !tab.queued.isEmpty, !tab.queuePaused, let agent = tab.agent else { return nil }
+        if tab.queueEditing { return "the Queued Messages window is open" }
+        if tab.pendingDraft != nil { return "a saved draft is being typed back in" }
+        switch tab.status {
+        case .working: return "\(agent.name) is working on the current turn"
+        case .waiting: return "\(agent.name) is asking you something"
+        case .idle: break
+        default: return "the session isn't ready yet"
+        }
+        // Just sent one and Claude hasn't picked it up yet (a reply can start a second or two later).
+        if let sent = tab.queueSentAt, Date().timeIntervalSince(sent) < 20 { return "waiting for \(agent.name) to pick up the last one" }
+        guard let box = InputBox.read(agent, tab.terminal.getTerminal()) else {
+            return "the input box isn't on screen (a menu or dialog is open, or the tab is scrolled up)"
+        }
+        if !box.isEmpty { return "something is typed in the input box; send or clear it" }
+        return ""
+    }
+
+    // MARK: Scheduled messages
+
+    func schedule(_ tab: SessionTab, _ text: String, at: Date) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        tab.scheduled.append(ScheduledMessage(at: at, text: text))
+        tab.scheduled.sort { $0.at < $1.at }
+        scheduleSave()
+    }
+
+    func unschedule(_ tab: SessionTab, _ id: UUID) {
+        tab.scheduled.removeAll { $0.id == id }
+        scheduleSave()
+    }
+
+    /// A scheduled message that's due joins the queue (first in line) and goes out once the session is free;
+    /// a sleeping session is woken for it.
+    private func sendScheduledIfDue(_ tab: SessionTab) {
+        guard !tab.scheduled.isEmpty, !tab.archived, tab.agent != nil else { return }
+        let now = Date()
+        let due = tab.scheduled.filter { $0.at <= now }
+        guard !due.isEmpty else { return }
+        tab.scheduled.removeAll { $0.at <= now }
+        tab.queued.insert(contentsOf: due.map(\.text), at: 0)
+        tab.queuePaused = false
+        if tab.status == .notStarted { wake(tab) } else if tab.status == .exited { tab.restart() }
+        objectWillChange.send()
+        scheduleSave()
     }
 
     private func sendDraftIfDone(_ tab: SessionTab) {
@@ -1355,6 +1434,20 @@ final class DeckStore: ObservableObject {
         for tab in liveTabs where tab.isAgent && !tab.pinned && tab.id != selectedID
             && tab.status == .idle && tab.lastActive > .distantPast && tab.lastActive < cutoff {
             archive(tab)
+        }
+    }
+
+    /// Settings → Put idle sessions to sleep (off by default): stop sessions you haven't used in N hours, to free
+    /// memory. Not pinned ones, the one you're on, or ones with something left to send.
+    private func autoSleepIdle() {
+        let hours = DeckSettings.autoSleepHours
+        guard hours > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(hours) * 3600)
+        for tab in liveTabs where tab.isAgent && !tab.pinned && tab.id != selectedID && tab.id != splitID
+            && tab.status == .idle && tab.claudePid != nil && tab.queued.isEmpty && tab.scheduled.isEmpty
+            && !tab.sendWhenDone && !tab.needsAttention // a reply you haven't seen yet
+            && tab.lastActive > .distantPast && tab.lastActive < cutoff {
+            sleep(tab)
         }
     }
 

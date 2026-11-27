@@ -45,6 +45,7 @@ if [ ! -f build.noindex/AppIcon.icns ]; then
 fi
 cp build.noindex/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/statusline.sh "$APP/Contents/Resources/statusline.sh"   # built-in status line
+cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"            # Tabwise → What's New
 chmod +x "$APP/Contents/Resources/statusline.sh"
 
 # Claude Code mods (plugin folders) loaded into every session; dev-only files stay behind.

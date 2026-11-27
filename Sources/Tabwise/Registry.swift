@@ -222,12 +222,12 @@ enum PromptFilter {
     ]
 
     /// Your message with paste wrappers removed and whitespace collapsed, or nil if it isn't one.
-    static func typedText(_ raw: String) -> String? {
+    static func typedText(_ raw: String, limit: Int = 240) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !systemPrefixes.contains(where: trimmed.hasPrefix) else { return nil }
         let unwrapped = trimmed.replacingOccurrences(of: "</?pasted_content[^>]*>", with: " ", options: .regularExpression)
         let clean = unwrapped.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return clean.isEmpty ? nil : String(clean.prefix(240))
+        return clean.isEmpty ? nil : String(clean.prefix(limit))
     }
 }
 
@@ -349,7 +349,7 @@ final class TranscriptReader {
             case "user":
                 if obj["isMeta"] as? Bool == true { continue }
                 // Tool results have no text parts; system text is filtered out.
-                guard let text = rawTexts(obj).last.flatMap(PromptFilter.typedText) else { continue }
+                guard let text = rawTexts(obj).last.flatMap({ PromptFilter.typedText($0) }) else { continue }
                 if info.lastUserAt == nil, let stamp = obj["timestamp"] as? String {
                     info.lastUserAt = Self.parseDate(stamp)
                 }

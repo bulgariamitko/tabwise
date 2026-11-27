@@ -104,6 +104,24 @@ enum AppActions {
     }
 
     static func close(_ tab: SessionTab, store: DeckStore) {
+        if tab.pinned && !tab.archived {
+            // Closing takes the tab out of Pinned; sleeping keeps it there and frees the same memory.
+            let asleep = tab.status == .notStarted
+            let alert = NSAlert()
+            alert.messageText = "Close pinned tab “\(tab.displayName)”?"
+            var info = "It will be removed from Pinned."
+            if tab.status == .working { info += " \(tab.agent?.name ?? "Claude") is still working in this tab; its current reply will be interrupted." }
+            if !asleep { info += " Put it to sleep instead to stop it and free memory while keeping it pinned; waking it resumes the conversation." }
+            alert.informativeText = info
+            if !asleep { alert.addButton(withTitle: "Put to Sleep") }
+            alert.addButton(withTitle: "Close")
+            alert.addButton(withTitle: "Cancel")
+            let answer = alert.runModal()
+            if !asleep && answer == .alertFirstButtonReturn { store.sleep(tab); return }
+            guard answer == (asleep ? .alertFirstButtonReturn : .alertSecondButtonReturn) else { return }
+            store.close(tab)
+            return
+        }
         if tab.status == .working {
             let alert = NSAlert()
             alert.messageText = "Close “\(tab.displayName)”?"
@@ -143,6 +161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             try? SMAppService.mainApp.register()
             UserDefaults.standard.set(true, forKey: "loginItemConfigured")
         }
+
+        if Demo.tabs == nil { WhatsNew.showIfUpdated() }
 
         // README screenshots: show the demo window on whatever Space is active (even over full-screen apps).
         if Demo.tabs != nil {
@@ -272,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         store.layout = sender.tag == 1 ? .projects : .recent
     }
     @objc func setOrder(_ sender: NSMenuItem) { store.manualOrder = sender.tag == 1 }
+    @objc func showWhatsNew(_ sender: Any?) { WhatsNew.show() }
     @objc func closeTab(_ sender: Any?) {
         if let tab = store.selected { AppActions.close(tab, store: store) } else { window.performClose(nil) }
     }
@@ -542,6 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         let app = submenu("Tabwise")
         add(app, "About Tabwise", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        add(app, "What's New in Tabwise…", #selector(showWhatsNew(_:)), target: self)
         add(app, "Check for Updates…", #selector(SPUStandardUpdaterController.checkForUpdates(_:)), target: updater)
         app.addItem(.separator())
         add(app, "Settings…", #selector(openSettings(_:)), ",", target: self)
@@ -644,6 +666,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.addItem(.separator())
         for i in 0..<9 { add(window, "Tab \(i + 1)", #selector(selectTab(_:)), "\(i + 1)", target: self, tag: i) }
         NSApp.windowsMenu = window
+
+        let help = submenu("Help")
+        add(help, "What's New in Tabwise…", #selector(showWhatsNew(_:)), target: self)
+        NSApp.helpMenu = help
 
         NSApp.mainMenu = main
     }

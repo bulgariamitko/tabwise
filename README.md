@@ -13,11 +13,12 @@ in a sidebar with live status, and nothing is lost when you quit, restart, or mo
 **Sessions**
 - Every Claude Code session is a tab: **working**, **waiting for you**, or **idle**, with notifications and a Dock badge when one finishes or needs input. <kbd>⌘J</kbd> jumps to the one that has waited longest.
 - Sorted by the session you last messaged, or **grouped by folder** in collapsible groups that still show what's working inside.
-- Pin, rename, color-label, add notes, archive, or **put a tab to sleep** to free its memory (it resumes where it was when you open it).
+- Pin, rename, color-label, add notes, archive, or **put a tab to sleep** to free its memory (it resumes where it was when you open it). Closing a pinned tab asks first and offers sleep instead; optionally, idle sessions go to sleep by themselves after a few hours (off by default).
 - **Import** the sessions you already have running in Terminal, or **resume** any session by pasting `claude --resume <id>` (flags are kept).
 - **Split view**, <kbd>⌘K</kbd> quick switcher, menu bar icon with live counts.
-- **Queue messages while the agent works** (Claude Code, Codex, Antigravity): type a message and press <kbd>⌘↩</kbd>, and it waits for the current turn to finish instead of cutting in. Press it again for each new message to stack as many as you like; they go out one by one, each after the previous reply. Click "N queued" on the tab to edit, reorder or remove them before they're sent.
-- **Auto-allow what auto mode blocks** (Claude Code, on by default): when auto mode's safety check blocks a command, Claude goes ahead instead of asking "Auto mode blocked … Allow it?". Turn it off for every session in Settings → Sessions, or for one session from its tab's right-click menu.
+- **Queue messages while the agent works** (Claude Code, Codex, Antigravity): type a message and press <kbd>⌘↩</kbd>, and it waits for the current turn to finish instead of cutting in. Press it again for each new message to stack as many as you like; they go out one by one, each after the previous reply. Messages with pasted text or images stack too. Click "N queued" on the tab to edit, reorder or remove them before they're sent; hover it to see what the queue is waiting for.
+- **Schedule a message**: right-click a session → Schedule Message… to send it at a set time (it waits for a turn in progress, and wakes a sleeping session).
+- **Auto-allow what auto mode blocks** (Claude Code, on by default): when auto mode's safety check blocks a command, Claude goes ahead instead of asking "Auto mode blocked … Allow it?". It also answers Yes to Claude Code's "Dangerous rm operation" questions (a separate switch in Settings). Turn it off for every session in Settings → Sessions, or for one session from its tab's right-click menu; Auto-Allowed Commands… in that menu lists what was let through.
 
 **Model router** (off by default; Settings → Model Router)
 - Tabwise reads the message you send and **puts the job on the model that fits it**: a light model for questions and chores, your everyday model for normal work, the strongest one for design, hard bugs and big changes. It works the same way for Claude Code, Codex and Antigravity, and you choose the model and effort for each level.
@@ -25,7 +26,8 @@ in a sidebar with live status, and nothing is lost when you quit, restart, or mo
 - **Each session can have its own model and effort**: right-click it → Model or Effort to set them by hand for that session, and leave the others automatic. This works with the router off too. Or just write "use Fable" or "use a cheaper model" in a message.
 
 **History**
-- **All Sessions** lists every past conversation on your Mac with its title, folder and last message — with pins, full-text search (Latin and Cyrillic), and one-click resume.
+- **All Sessions** lists every past conversation on your Mac with its title, folder and last message — with pins, search through everything you typed (plus optional full-text search of whole conversations, Latin and Cyrillic), and one-click resume.
+- **What's New** (Tabwise menu or Help) shows what each version changed.
 - **Click a session ID to resume it**: when a terminal shows a Claude Code, Codex or Antigravity session ID (say, in a `claude --resume <id>` line), click it to open that session in a tab, in its own folder, or to switch to its tab if it's already open.
 
 **Never lose work**

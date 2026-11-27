@@ -63,6 +63,16 @@ struct SavedTab: Codable {
     /// for automatic (the router's choice where it's on).
     var model: String?
     var effort: String?
+    /// Messages to send at a set time (right-click → Schedule Message…).
+    var scheduled: [ScheduledMessage]?
+}
+
+/// A message to send to a session at a set time. When it's due it joins the session's queue, so it waits for
+/// a turn in progress like any queued message.
+struct ScheduledMessage: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var at: Date
+    var text: String
 }
 
 @MainActor
@@ -116,7 +126,13 @@ final class SessionTab: ObservableObject, Identifiable {
     /// Messages lifted out of the input box with ⌘↩, typed in and sent one per turn, oldest first.
     @Published var queued: [String] = []
     /// The queue waits for you: the last turn failed, the Mac slept mid-turn, or the app restarted. ⌘↩ resumes.
-    @Published var queuePaused = false
+    @Published var queuePaused = false { didSet { if !queuePaused { queuePauseReason = nil } } }
+    /// Why the queue paused, in a few words ("the last turn failed").
+    @Published var queuePauseReason: String?
+    /// What the next queued message is waiting for right now ("something is typed in the input box").
+    @Published var queueWait: String?
+    /// Messages to send at a set time, soonest first.
+    @Published var scheduled: [ScheduledMessage] = []
     /// When the last queued message went out; the next one waits until Claude has worked on it.
     var queueSentAt: Date?
     /// The queue is open for editing: hold it until the window closes.
@@ -174,6 +190,8 @@ final class SessionTab: ObservableObject, Identifiable {
         pendingDraft = saved.draft
         queued = saved.queued ?? []
         queuePaused = !queued.isEmpty
+        if queuePaused { queuePauseReason = "Tabwise restarted" }
+        scheduled = saved.scheduled ?? []
         wasRunning = saved.running ?? false
         tier = saved.tier.flatMap(Tier.init(rawValue:))
         modelPick = Pick(saved: saved.model)
@@ -187,7 +205,7 @@ final class SessionTab: ObservableObject, Identifiable {
                  lastActive: lastActive, extraArgs: extraArgs.isEmpty ? nil : extraArgs, draft: draft,
                  queued: queued.isEmpty ? nil : queued,
                  running: status.isActive || status == .shell ? true : nil, tier: tier?.rawValue,
-                 model: modelPick.saved, effort: effortPick.saved)
+                 model: modelPick.saved, effort: effortPick.saved, scheduled: scheduled.isEmpty ? nil : scheduled)
     }
 
     var displayName: String {
@@ -224,6 +242,8 @@ final class SessionTab: ObservableObject, Identifiable {
             // files are read on each block, so changing the setting reaches the running session.
             extraEnv["TABWISE_AUTO_ALLOW_DIR"] = DeckSettings.autoAllowDir.path
             extraEnv["TABWISE_TAB_ID"] = id.uuidString
+            // The mod writes its log of what it let through here (right-click → Auto-Allowed Commands…).
+            try? FileManager.default.createDirectory(at: DeckSettings.autoAllowDir, withIntermediateDirectories: true)
             if !settings.isEmpty, let json = try? JSONSerialization.data(withJSONObject: settings),
                let text = String(data: json, encoding: .utf8) {
                 parts += ["--settings", ResumeCommand.shellQuote(text)]
@@ -382,6 +402,18 @@ final class SessionTab: ObservableObject, Identifiable {
     var autoAllow: Bool { autoAllowOverride ?? DeckSettings.autoAllow }
 
     private var autoAllowFile: URL { DeckSettings.autoAllowDir.appendingPathComponent(id.uuidString) }
+
+    /// What the ask-on-deny mod let through in this tab, newest first.
+    var autoAllowedLog: [(at: Date?, what: String)] {
+        let url = DeckSettings.autoAllowDir.appendingPathComponent(id.uuidString + ".log")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return text.split(separator: "\n").reversed().map { line in
+            let parts = line.split(separator: "\t", maxSplits: 1)
+            return parts.count == 2 ? (iso.date(from: String(parts[0])), String(parts[1])) : (nil, String(line))
+        }
+    }
 
     /// The window title as the agent set it (Codex shows its working spinner there).
     var rawTitle: String?

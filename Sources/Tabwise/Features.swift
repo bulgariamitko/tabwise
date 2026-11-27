@@ -42,6 +42,18 @@ enum DeckSettings {
         }
     }
 
+    /// Auto-allow also answers Yes to Claude Code's dangerous-removal questions ("Dangerous rm operation on …",
+    /// "can't be sure it read this command"); on by default. Off is a `no-removals` file the mod reads.
+    static var autoAllowRemovals: Bool {
+        get { !FileManager.default.fileExists(atPath: autoAllowDir.appendingPathComponent("no-removals").path) }
+        set {
+            let file = autoAllowDir.appendingPathComponent("no-removals")
+            try? FileManager.default.createDirectory(at: autoAllowDir, withIntermediateDirectories: true)
+            if newValue { try? FileManager.default.removeItem(at: file) }
+            else { FileManager.default.createFile(atPath: file.path, contents: Data()) }
+        }
+    }
+
     static var autoAllowDir: URL {
         DeckStore.stateURL.deletingLastPathComponent().appendingPathComponent("auto-allow")
     }
@@ -64,6 +76,12 @@ enum DeckSettings {
     static var autoArchiveDays: Int {
         get { UserDefaults.standard.integer(forKey: "autoArchiveDays") }
         set { UserDefaults.standard.set(newValue, forKey: "autoArchiveDays") }
+    }
+
+    /// Put sessions to sleep after this many idle hours (0 = never, the default).
+    static var autoSleepHours: Int {
+        get { UserDefaults.standard.integer(forKey: "autoSleepHours") }
+        set { UserDefaults.standard.set(newValue, forKey: "autoSleepHours") }
     }
 }
 
@@ -125,8 +143,10 @@ struct SettingsView: View {
     @State private var destination = BackupManager.destinationName
     @State private var command = DeckSettings.defaultCommand
     @State private var archiveDays = DeckSettings.autoArchiveDays
+    @State private var sleepHours = DeckSettings.autoSleepHours
     @State private var statusLine = DeckSettings.builtInStatusLine
     @State private var autoAllow = DeckSettings.autoAllow
+    @State private var autoAllowRemovals = DeckSettings.autoAllowRemovals
     @State private var shareMCP = MCPShare.enabled
     @State private var keepAwake = DeckSettings.keepAwake
     @State private var restartRunning = DeckSettings.restartRunning
@@ -280,10 +300,28 @@ struct SettingsView: View {
                 .onChange(of: archiveDays) { _, v in DeckSettings.autoArchiveDays = v }
                 Text("Idle, unpinned sessions you haven't messaged in that long are stopped to free memory. Unarchive resumes them.")
                     .font(.caption).foregroundStyle(.secondary)
+                Picker("Put idle sessions to sleep", selection: $sleepHours) {
+                    Text("Never").tag(0)
+                    Text("After 1 hour").tag(1)
+                    Text("After 2 hours").tag(2)
+                    Text("After 4 hours").tag(4)
+                    Text("After 8 hours").tag(8)
+                    Text("After 24 hours").tag(24)
+                }
+                .onChange(of: sleepHours) { _, v in DeckSettings.autoSleepHours = v }
+                Text("Sessions you haven't messaged in that long are put to sleep to free memory; they stay in the list and clicking one resumes the conversation. Never pinned sessions, the one you're on, ones with a reply you haven't seen, or ones with queued or scheduled messages.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Auto-allow what auto mode blocks", isOn: $autoAllow)
                     .onChange(of: autoAllow) { _, v in DeckSettings.autoAllow = v }
-                Text("When auto mode's safety check blocks a command, Claude goes on instead of asking \"Auto mode blocked … Allow it?\" (the ask-on-deny mod). For every session; right-click a tab to change it for that one. Applies to running sessions started in Tabwise 0.1.24 or later.")
+                Text("When auto mode's safety check blocks a command, Claude goes on instead of asking \"Auto mode blocked … Allow it?\" (the ask-on-deny mod). For every session; right-click a tab to change it for that one, or to see what was let through (Auto-Allowed Commands…). Applies to running sessions started in Tabwise 0.1.24 or later.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Also answer Yes when a command deletes files", isOn: $autoAllowRemovals)
+                    .onChange(of: autoAllowRemovals) { _, v in DeckSettings.autoAllowRemovals = v }
+                    .disabled(!autoAllow)
+                    .padding(.leading, 18)
+                Text("Claude Code asks before an rm it can't check (\"Dangerous rm operation on …\", \"can't be sure it read this command…\"). On: auto-allow answers Yes to those too. Off: you're asked, while the rest of auto-allow goes on.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.leading, 18)
                 Toggle("Built-in status line", isOn: $statusLine)
                     .onChange(of: statusLine) { _, v in DeckSettings.builtInStatusLine = v }
                 Text("Shows model, effort, rate limits, tokens, git and session time under Claude's input box. Applies to sessions started or restarted after changing it. Turn off to use your own Claude Code status line setting.")

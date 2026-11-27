@@ -17,6 +17,11 @@ struct HistoryItem: Codable, Identifiable, Hashable {
     var firstUUID: String?
     var lastUUID: String?
     var entrypoint: String?   // "cli" for interactive, "sdk-cli" for automated runs
+    /// Every distinct word you typed in this session (lowercased, space-separated), so search finds a session
+    /// by any of your messages, not only the first and last.
+    var userWords: String?
+    /// How far into the file `userWords` has read; a session that grew is read on from here.
+    var wordsReadTo: Int?
 
     /// When you last talked to it; falls back to the file's modification time.
     var lastActive: Date { lastUserAt ?? mtime }
@@ -40,7 +45,7 @@ enum HistoryScanner {
         let fm = FileManager.default
         let dirs = (try? fm.contentsOfDirectory(at: Registry.projectsDir, includingPropertiesForKeys: nil)) ?? []
         var items: [HistoryItem] = []
-        var toRead: [(URL, Date, Int)] = []
+        var toRead: [(URL, Date, Int, HistoryItem?)] = []
         for dir in dirs {
             guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])
             else { continue }
@@ -50,7 +55,7 @@ enum HistoryScanner {
                 if let old = cached[url.path], old.size == size, old.mtime == mtime {
                     items.append(old)
                 } else {
-                    toRead.append((url, mtime, size))
+                    toRead.append((url, mtime, size, cached[url.path]))
                 }
             }
         }
@@ -58,8 +63,9 @@ enum HistoryScanner {
         var fresh = [HistoryItem?](repeating: nil, count: toRead.count)
         let lock = NSLock()
         DispatchQueue.concurrentPerform(iterations: toRead.count) { i in
-            let (url, mtime, size) = toRead[i]
-            let item = read(url, mtime: mtime, size: size)
+            let (url, mtime, size, old) = toRead[i]
+            var item = read(url, mtime: mtime, size: size)
+            if item != nil { readWords(url, size: size, into: &item!, after: old) }
             lock.lock(); fresh[i] = item; lock.unlock()
         }
         return items + fresh.compactMap { $0 }
@@ -70,15 +76,22 @@ enum HistoryScanner {
         defer { try? handle.close() }
         var item = HistoryItem(id: url.deletingPathExtension().lastPathComponent, path: url.path, mtime: mtime, size: size)
 
-        // Head: folder, creation time, first prompt.
-        let head = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
-        for line in lines(head, dropFirst: false, dropLast: size > head.count) {
-            guard let obj = json(line) else { continue }
-            if item.created == nil, let ts = obj["timestamp"] as? String { item.created = TranscriptReader.parseDate(ts) }
-            if item.cwd == nil, let cwd = obj["cwd"] as? String { item.cwd = cwd }
-            if item.entrypoint == nil { item.entrypoint = obj["entrypoint"] as? String }
-            if item.firstPrompt == nil, let p = typedPrompt(obj) { item.firstPrompt = p.text; item.firstUUID = obj["uuid"] as? String }
-            if item.cwd != nil, item.firstPrompt != nil, item.created != nil { break }
+        // Head: folder, creation time, first prompt. A first message with a pasted image can be a line of
+        // megabytes; read further until it's whole, or the session looks empty and is hidden from search.
+        var headSize = 256 * 1024
+        while true {
+            try? handle.seek(toOffset: 0)
+            let head = (try? handle.read(upToCount: headSize)) ?? Data()
+            for line in lines(head, dropFirst: false, dropLast: size > head.count) {
+                guard let obj = json(line) else { continue }
+                if item.created == nil, let ts = obj["timestamp"] as? String { item.created = TranscriptReader.parseDate(ts) }
+                if item.cwd == nil, let cwd = obj["cwd"] as? String { item.cwd = cwd }
+                if item.entrypoint == nil { item.entrypoint = obj["entrypoint"] as? String }
+                if item.firstPrompt == nil, let p = typedPrompt(obj) { item.firstPrompt = p.text; item.firstUUID = obj["uuid"] as? String }
+                if item.cwd != nil, item.firstPrompt != nil, item.created != nil { break }
+            }
+            if item.firstPrompt != nil || head.count >= size || headSize >= 16 * 1024 * 1024 { break }
+            headSize *= 4
         }
 
         // Tail, growing until we have your last prompt and a title (or reach the start).
@@ -116,16 +129,54 @@ enum HistoryScanner {
         return item
     }
 
+    /// Adds the words of your typed messages to `item.userWords`: from where `old` stopped if the file only
+    /// grew, else from the start. Only lines that hold a message of yours are parsed.
+    static func readWords(_ url: URL, size: Int, into item: inout HistoryItem, after old: HistoryItem?) {
+        let cap = 40_000 // characters of distinct words kept per session
+        var start = 0
+        var words: [String] = []
+        if let old, let readTo = old.wordsReadTo, readTo <= size, old.size <= size {
+            start = readTo
+            words = old.userWords?.split(separator: " ").map(String.init) ?? []
+        }
+        var seen = Set(words)
+        var length = words.reduce(0) { $0 + $1.count + 1 }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: UInt64(start))
+        let userMarker = Data("\"type\":\"user\"".utf8), toolMarker = Data("\"tool_use_id\"".utf8)
+        var offset = start, carry = Data()
+        while offset < size, length < cap {
+            guard let chunk = try? handle.read(upToCount: 4 * 1024 * 1024), !chunk.isEmpty else { break }
+            offset += chunk.count
+            var data = carry + chunk
+            guard let lastNewline = data.lastIndex(of: 0x0A) else { carry = data; continue }
+            carry = Data(data[data.index(after: lastNewline)...])
+            data = Data(data[..<lastNewline])
+            for line in data.split(separator: 0x0A) where line.range(of: userMarker) != nil && line.range(of: toolMarker) == nil {
+                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let typed = typedPrompt(obj, whole: true)?.text else { continue }
+                for word in typed.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) where word.count >= 2 {
+                    let w = String(word.prefix(40))
+                    if seen.insert(w).inserted { words.append(w); length += w.count + 1 }
+                }
+            }
+        }
+        item.userWords = words.isEmpty ? nil : words.joined(separator: " ")
+        item.wordsReadTo = offset - carry.count
+    }
+
     /// A message you actually typed (not tool output, commands or system text).
-    private static func typedPrompt(_ obj: [String: Any]) -> (text: String, at: Date?)? {
+    private static func typedPrompt(_ obj: [String: Any], whole: Bool = false) -> (text: String, at: Date?)? {
         guard obj["type"] as? String == "user", obj["isMeta"] as? Bool != true,
               let message = obj["message"] as? [String: Any] else { return nil }
         var text: String?
         if let s = message["content"] as? String { text = s }
         if let parts = message["content"] as? [[String: Any]] {
-            text = parts.first { $0["type"] as? String == "text" }?["text"] as? String
+            let texts = parts.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }
+            text = whole ? (texts.isEmpty ? nil : texts.joined(separator: " ")) : texts.first
         }
-        guard let clean = text.flatMap(PromptFilter.typedText) else { return nil }
+        guard let clean = text.flatMap({ PromptFilter.typedText($0, limit: whole ? 200_000 : 240) }) else { return nil }
         return (clean, (obj["timestamp"] as? String).flatMap(TranscriptReader.parseDate))
     }
 
@@ -181,7 +232,7 @@ final class HistoryStore: ObservableObject {
     var onRefreshed: (([HistoryItem]) -> Void)?
     private let dir = DeckStore.stateURL.deletingLastPathComponent()
     // Bump the file name when HistoryItem gains fields, so old caches are rebuilt.
-    private var indexURL: URL { dir.appendingPathComponent("history-index-v3.json") }
+    private var indexURL: URL { dir.appendingPathComponent("history-index-v5.json") }
     private var metaURL: URL { dir.appendingPathComponent("history.json") }
 
     init() {

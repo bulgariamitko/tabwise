@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.25
+
+- Schedule a message: right-click a session → Schedule Message… and pick a time (or 15 min, 1 hour, 3 hours, tomorrow 9:00). When it's due it joins the queue, so it waits for a turn in progress; a sleeping session is woken for it. The tab shows the next time; click it to change or cancel
+- The queue says why it isn't sending: hover "N queued" to see what it's waiting for (Claude is working, something is typed in the input box, a menu is open…) or why it paused
+- Auto-Allowed Commands…: right-click a Claude session to see what Tabwise auto-allowed in it, with times (the last 200)
+- Search looks through every message you typed in a session, not only the first and last
+- Put idle sessions to sleep (Settings → Sessions; off by default): sessions you haven't messaged in 1–24 hours stop to free memory, and resume when you click them. Never pinned sessions, the one you're on, ones with a reply you haven't seen, or ones with queued or scheduled messages
+- What's New: Tabwise → What's New in Tabwise… (also in the Help menu) shows what each version changed. It opens by itself once after an update
+- ⌘↩ now stacks messages with images too (shown as "[Image #2]"): Tabwise keeps the image you pasted or dropped and attaches it again when the message is sent. Before, such a message stayed in the box as Send When Done. Images pasted before Tabwise started still stay in the box
+- Closing a pinned tab asks first, since it takes the tab out of Pinned, and offers Put to Sleep instead: the session stops and frees memory but stays pinned, and waking it resumes the conversation
+- Auto-allow what auto mode blocks now also answers Yes to Claude Code's dangerous-removal questions ("can't be sure it read this command the way the shell will" and "Dangerous rm operation on …"), under the same setting and per-tab switch. These commands delete files: Settings → "Also answer Yes when a command deletes files" turns just this part off
+- Search finds sessions you closed, or started, since Tabwise last read your past sessions. Before, a session started after Tabwise opened and then closed couldn't be found by its name until you opened All Sessions
+- Sessions whose first message had a large pasted image no longer look empty: they were hidden from search and from All Sessions
+
 ## 0.1.24
 
 - Auto-allow what auto mode blocks (Settings → Sessions, on by default): when auto mode's safety check blocks a command, Claude goes on instead of stopping at "Auto mode blocked … Allow it?" (the ask-on-deny mod). Right-click a Claude tab → Auto-allow What Auto Mode Blocks to turn it off or on for that session alone. Switching either one reaches running sessions right away (for sessions started in 0.1.24 or later)

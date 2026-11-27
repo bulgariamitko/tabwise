@@ -59,7 +59,7 @@ final class BackupManager: ObservableObject {
 
     private static let appFiles = ["tabs.json", "closed.json", "history.json", "prompts.json"]
     /// Preferences worth carrying to another Mac.
-    private static let prefKeys = ["defaultCommand", "autoArchiveDays", "builtInStatusLine", "keepAwake", "folderColors",
+    private static let prefKeys = ["defaultCommand", "autoArchiveDays", "autoSleepHours", "builtInStatusLine", "keepAwake", "folderColors",
                                    "folderColorSlots", "sidebarLayout", "fontSize", "historyShowEmpty", "historyDeepSearch",
                                    "splitVertical", "splitFraction", "selectedTab"]
     private var stateDir: URL { DeckStore.stateURL.deletingLastPathComponent() }
